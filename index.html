@@ -116,7 +116,14 @@ const SYMBOLS = [
   { s: '^IXIC', n: 'Nasdaq', dp: 0 },
   { s: '^SOX', n: '費城半導體', dp: 0 },
   { s: '^VIX', n: 'VIX 恐慌指數', dp: 2 },
+  { s: 'TSM', n: '台積電 ADR (USD)', dp: 2 },
+  { s: 'EWT', n: 'EWT 台股 ETF (USD)', dp: 2 },
+  { s: 'TWD=X', n: '美元兌台幣', dp: 3 },
+  { s: 'NVDA', n: 'NVIDIA', dp: 2 },
+  { s: '^TNX', n: '美債 10 年殖利率', dp: 3 },
 ];
+// 數值上升代表偏空的標的（VIX 升 = 恐慌、USD/TWD 升 = 台幣貶）
+const INVERSE = { '^VIX': ['恐慌升溫', '恐慌消退'], 'TWD=X': ['台幣走貶', '台幣走升'], '^TNX': ['殖利率走高', '殖利率走低'] };
 const DATA = {};
 let selected = '00406A.TW';
 const $ = id => document.getElementById(id);
@@ -159,11 +166,11 @@ function compute(rows) {
 // 依指標產生描述性標籤（bull=偏多 / bear=偏空 / neu=中性或超買超賣）
 function signals(sym, x) {
   const N = x.c.length - 1, p = x.c[N], t = [];
-  const inv = sym === '^VIX';
+  const inv = INVERSE[sym];
   const B = inv ? 'bear' : 'bull', S = inv ? 'bull' : 'bear';
   if (x.ma20[N] != null && x.ma60[N] != null) {
-    if (p > x.ma20[N] && x.ma20[N] > x.ma60[N]) t.push([B, inv ? '恐慌升溫' : '多頭排列']);
-    else if (p < x.ma20[N] && x.ma20[N] < x.ma60[N]) t.push([S, inv ? '恐慌消退' : '空頭排列']);
+    if (p > x.ma20[N] && x.ma20[N] > x.ma60[N]) t.push([B, inv ? inv[0] : '多頭排列']);
+    else if (p < x.ma20[N] && x.ma20[N] < x.ma60[N]) t.push([S, inv ? inv[1] : '空頭排列']);
     else t.push(['neu', p > x.ma20[N] ? '站上月線' : '跌破月線']);
   }
   const hN = x.hist[N], h1 = x.hist[N - 1];
@@ -224,8 +231,55 @@ function renderCards() {
       <div class="mute" style="font-size:11px">${marketTime(d.meta)}</div>
       <div class="tags">${signals(s, d.ind).map(([k, t]) => `<span class="tag ${k}">${t}</span>`).join('')}</div>
     </div>`;
-  }).join('');
-  document.querySelectorAll('.card').forEach(el => el.onclick = () => { selected = el.dataset.s; renderCards(); renderDetail(); });
+  }).join('') + gapCards();
+  document.querySelectorAll('.card[data-s]').forEach(el => el.onclick = () => { selected = el.dataset.s; renderCards(); renderDetail(); });
+}
+
+// ---------- 美股推估台股開盤 ----------
+const byDate = d => Object.fromEntries(d.rows.map(r => [r.d, r.c]));
+const lastPx = d => d.meta.regularMarketPrice ?? d.rows.at(-1).c;
+// 台積電 ADR 溢價：1 ADR = 5 股；以近 20 個對得上日期的平均溢價推算台積電合理價
+function adrPremium() {
+  const adr = DATA['TSM'], fx = DATA['TWD=X'], tw = DATA['2330.TW'];
+  if ([adr, fx, tw].some(d => !d || d.error)) return null;
+  const A = byDate(adr), F = byDate(fx);
+  const hist = tw.rows.filter(r => A[r.d] && F[r.d]).map(r => A[r.d] * F[r.d] / 5 / r.c - 1).slice(-20);
+  const base = hist.reduce((a, b) => a + b, 0) / hist.length;
+  const twLast = tw.rows.at(-1).c, adrTwd = lastPx(adr) * lastPx(fx) / 5, now = adrTwd / twLast - 1;
+  const implied = adrTwd / (1 + base);
+  return { adrTwd, now, base, implied, chg: implied / twLast - 1, twLast };
+}
+// EWT 推估加權跳空：台股最後一個交易日之後美股的變動（換成台幣計），扣掉台股當天已反映的部分
+function ewtGap() {
+  const e = DATA['EWT'], fx = DATA['TWD=X'], tw = DATA['^TWII'];
+  if ([e, fx, tw].some(d => !d || d.error)) return null;
+  const dT = tw.rows.at(-1).d, eLast = e.rows.at(-1).d;
+  if (eLast < dT) return { intraday: true };
+  const b = [...e.rows].reverse().find(r => r.d < dT), F = byDate(fx);
+  const fxB = F[b.d] ?? fx.rows.filter(r => r.d <= b.d).at(-1)?.c;
+  const ewtChg = (lastPx(e) * lastPx(fx)) / (b.c * fxB) - 1;
+  const twChg = tw.rows.at(-1).c / tw.rows.at(-2).c - 1;
+  const gap = (1 + ewtChg) / (1 + twChg) - 1;
+  return { gap, ewtChg, twChg, from: b.d, twDate: dT, implied: tw.rows.at(-1).c * (1 + gap) };
+}
+function gapCards() {
+  const a = adrPremium(), g = ewtGap(), e = DATA['00406A.TW'];
+  let html = '';
+  if (a) html += `<div class="card" style="cursor:default">
+      <div class="mute">台積電 ADR 溢價</div>
+      <div class="px">${sgn(a.now * 100)}%</div>
+      <div class="mute" style="font-size:12px">ADR 換算 ${fmt(a.adrTwd, 0)} 元 · 20 日均溢價 ${sgn(a.base * 100)}%</div>
+      <div style="font-size:12px">依均溢價推算台積電 <b class="${cls(a.chg)}">${fmt(a.implied, 0)}（${sgn(a.chg * 100)}%）</b></div>
+    </div>`;
+  if (g) html += g.intraday
+    ? `<div class="card" style="cursor:default"><div class="mute">EWT 推估加權跳空</div><div class="mute">台股盤中，暫不適用</div></div>`
+    : `<div class="card" style="cursor:default">
+      <div class="mute">EWT 推估加權跳空</div>
+      <div class="px ${cls(g.gap)}">${sgn(g.gap * 100)}%</div>
+      <div class="mute" style="font-size:12px">EWT(台幣計) ${g.from.slice(5)} 起 ${sgn(g.ewtChg * 100)}%，加權 ${g.twDate.slice(5)} 已反映 ${sgn(g.twChg * 100)}%</div>
+      <div style="font-size:12px">推估加權 <b class="${cls(g.gap)}">${fmt(g.implied, 0)}</b>${e && !e.error ? ` · 00406A 約 <b class="${cls(g.gap)}">${fmt(e.rows.at(-1).c * (1 + g.gap))}</b>` : ''}</div>
+    </div>`;
+  return html;
 }
 
 let charts = null;
