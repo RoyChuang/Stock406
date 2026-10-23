@@ -7,7 +7,9 @@
 import { readFile, writeFile } from 'node:fs/promises';
 
 const DEFAULTS = {
-  ladder: [],          // 00406A 分批價位，觸及時提醒
+  // 00406A 分批價位，觸及時提醒。每一項可以是固定價格，或每次用最新日 K 計算的動態價位：
+  //   "bbL" 布林下軌、"lo20" 近 20 日低、"lo60" 近 60 日低、"pct-3" 昨收 -3%
+  ladder: ['bbL', 'lo20', 'lo60'],
   twDownPct: -1.5,     // 加權當日跌幅達到時提醒
   twUpPct: 1.5,        // 加權當日漲幅達到時提醒
   fastPct: 0.7,        // 加權 15 分鐘內急殺 / 急拉幅度
@@ -45,13 +47,22 @@ const tw = twI.meta.regularMarketPrice, twPrev = before(twD).at(-1).c, twChg = (
 const etf = etfI.meta.regularMarketPrice, etfPrev = before(etfD).at(-1).c, etfChg = (etf / etfPrev - 1) * 100;
 const past = before(etfD).map(r => r.c);
 const ma5 = sma(past, 5), ma20 = sma(past, 20), sd = Math.sqrt(past.slice(-20).reduce((s, v) => s + (v - ma20) ** 2, 0) / 20), bbL = ma20 - 2 * sd;
-const lo20 = Math.min(...before(etfD).slice(-20).map(r => r.l));
+const lo20 = Math.min(...before(etfD).slice(-20).map(r => r.l)), lo60 = Math.min(...before(etfD).slice(-60).map(r => r.l));
+const DYNAMIC = { bbL: [bbL, '布林下軌'], lo20: [lo20, '近 20 日低'], lo60: [lo60, '近 60 日低'] };
+function level(x) {
+  if (typeof x === 'number') return { p: x, label: '' };
+  if (DYNAMIC[x]) return { p: +DYNAMIC[x][0].toFixed(2), label: DYNAMIC[x][1] };
+  const m = /^pct(-?\d+(?:\.\d+)?)$/.exec(x);
+  if (m) return { p: +(etfPrev * (1 + m[1] / 100)).toFixed(2), label: `昨收 ${m[1]}%` };
+  throw new Error(`ALERT_CONFIG ladder 看不懂：${x}`);
+}
+const ladder = cfg.ladder.map(level);
 // 15 分鐘變化：當日最新一根 5 分 K 對比 3 根前
 const tr = twI.rows.filter(r => r.d === session), fast = tr.length > 3 ? (tr.at(-1).c / tr.at(-4).c - 1) * 100 : 0;
 
 const signals = [];
 const add = (key, priority, title, msg) => signals.push({ key, priority, title, msg });
-cfg.ladder.forEach((p, i) => { if (etf <= p) add(`ladder${i}`, 4, `00406A 觸及第 ${i + 1} 批 ${p}`, `現價 ${etf}（${pct(etfChg)}）`); });
+ladder.forEach(({ p, label }, i) => { if (etf <= p) add(`ladder${i}`, 4, `00406A 觸及第 ${i + 1} 批 ${p}${label ? `（${label}）` : ''}`, `現價 ${etf}（${pct(etfChg)}）`); });
 if (etf < bbL) add('bbL', 4, '00406A 跌破布林下軌', `現價 ${etf}，布林下軌 ${bbL.toFixed(2)}（轉弱警示）`);
 if (etf < lo20) add('lo20', 3, '00406A 跌破近 20 日低', `現價 ${etf}，近 20 日低 ${lo20.toFixed(2)}`);
 if (etf > ma5) add('ma5', 3, '00406A 站上 MA5', `現價 ${etf}，MA5 ${ma5.toFixed(2)}（止跌訊號之一）`);
@@ -64,6 +75,7 @@ if (fast <= -cfg.fastPct) add(`fastDown${slot}`, 5, `加權 15 分鐘急殺 ${pc
 if (fast >= cfg.fastPct) add(`fastUp${slot}`, 4, `加權 15 分鐘急拉 ${pct(fast)}`, `加權 ${tw.toFixed(0)}（當日 ${pct(twChg)}）`);
 
 console.log(`加權 ${tw.toFixed(0)} (${pct(twChg)}) 15分 ${pct(fast)} | 00406A ${etf} (${pct(etfChg)}) MA5 ${ma5.toFixed(2)} 布林下 ${bbL.toFixed(2)} 20日低 ${lo20.toFixed(2)}`);
+console.log('分批價位：' + ladder.map((l, i) => `第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、'));
 
 let state = { date: today, sent: [] };
 try { const s = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (s.date === today) state = s; } catch {}
