@@ -75,13 +75,14 @@ td:first-child,th:first-child{text-align:left}
       <label>總預算（含已投入）<input id="budget" type="number" step="10000" style="width:110px"></label>
       <button id="split123">剩餘預算依 1:2:3 分配</button>
       <button id="splitEq">剩餘預算平均分配</button>
+      <button id="resetLadder">依最新價重設價位</button>
     </div>
     <div class="two">
       <div class="kv" id="pos"></div>
       <div>
         <h2>分批加碼試算</h2>
         <div class="tblwrap"><table id="ladder"></table></div>
-        <div class="legend">價位預設取自 MA5、布林下軌、近 60 日低點等，可直接修改價格與張數。</div>
+        <div class="legend">價位預設只取現價以下的支撐（現價、近 20 日低、布林下軌、近 60 日低，不足三檔時用 -5%、-10% 補齊）。可以直接修改；行情變動後可按「依最新價重設價位」。MA5、月線屬於「站回才確認止跌」的價位，列在下週觀察重點，不放在分批掛單。</div>
       </div>
     </div>
   </div>
@@ -318,38 +319,52 @@ function renderPosition() {
     <span>回本價（扣已領息）</span><b>${fmt((cost - pos.divs) / sh)}</b>
     <span>若再跌 10%</span><b class="down">${fmt(-mv * 0.1, 0)}</b>
     <span>總預算 / 剩餘可投入</span><b>${fmt(+pos.budget, 0)} / ${fmt(pos.budget - cost, 0)}</b>`;
-  const x = d.ind, N = x.c.length - 1;
-  const ladder = pos.ladder || [
-    { p: +x.ma5[N].toFixed(2), q: 5 }, { p: +x.bbL[N].toFixed(2), q: 10 }, { p: +Math.min(...x.l.slice(-60)).toFixed(2), q: 15 }];
-  renderLadder(pos, ladder);
+  renderLadder(pos, pos.ladder || defaultLadder(d, [5, 10, 15]));
+}
+// 分批價位只取「現價以下」的支撐：現價、近 20 日低、布林下軌、近 60 日低；彼此差距 <0.5% 視為同一價位
+function defaultLadder(d, qs = []) {
+  const x = d.ind, N = x.c.length - 1, p = d.meta.regularMarketPrice ?? x.c[N];
+  const cand = [['現價', p], ['近 20 日低', Math.min(...x.l.slice(-20))], ['布林下軌', x.bbL[N]], ['近 60 日低', Math.min(...x.l.slice(-60))]]
+    .filter(([, v]) => v != null && v <= p).sort((a, b) => b[1] - a[1]);
+  const out = [];
+  for (const [src, v] of cand) if (!out.length || (out.at(-1).p - v) / out.at(-1).p >= 0.005) out.push({ src, p: +v.toFixed(2) });
+  // 支撐不足三檔時，用現價 -5%、-10% 補齊
+  for (const pct of [5, 10]) if (out.length < 3 && out.at(-1).p > p * (1 - pct / 100) * 1.005) out.push({ src: `現價 -${pct}%`, p: +(p * (1 - pct / 100)).toFixed(2) });
+  return out.slice(0, 3).map((r, i) => ({ ...r, q: qs[i] ?? 0 }));
 }
 // 把剩餘預算依權重分到各批，張數無條件捨去
 function splitBudget(weights) {
   const pos = getPos(), d = DATA['00406A.TW'];
   if (!d || d.error) return;
-  const x = d.ind, N = x.c.length - 1;
-  const ladder = pos.ladder || [
-    { p: +x.ma5[N].toFixed(2) }, { p: +x.bbL[N].toFixed(2) }, { p: +Math.min(...x.l.slice(-60)).toFixed(2) }];
+  const ladder = pos.ladder || defaultLadder(d);
   const left = pos.budget - pos.lots * 1000 * pos.avg, W = weights.reduce((a, b) => a + b, 0);
   ladder.forEach((r, i) => r.q = Math.max(0, Math.floor(left * weights[i] / W / (r.p * 1000))));
   pos.ladder = ladder; savePos(pos); renderPosition();
 }
 $('split123').onclick = () => splitBudget([1, 2, 3]);
 $('splitEq').onclick = () => splitBudget([1, 1, 1]);
+$('resetLadder').onclick = () => {
+  const p = getPos(), d = DATA['00406A.TW'];
+  if (!d || d.error) return;
+  p.ladder = defaultLadder(d, (p.ladder || []).map(r => r.q)); savePos(p); renderPosition();
+};
 function renderLadder(pos, ladder) {
+  const d = DATA['00406A.TW'], now = d && !d.error ? (d.meta.regularMarketPrice ?? d.ind.c.at(-1)) : null;
   let sh = pos.lots * 1000, cost = sh * pos.avg;
   const rows = ladder.map((r, i) => {
     sh += r.q * 1000; cost += r.q * 1000 * r.p;
-    return `<tr><td>第 ${i + 1} 批</td><td><input data-i="${i}" data-k="p" type="number" step="0.01" value="${r.p}" style="width:80px"></td>
+    const above = now != null && r.p > now;
+    return `<tr><td>第 ${i + 1} 批</td><td class="mute">${r.src || '自訂'}</td><td><input data-i="${i}" data-k="p" type="number" step="0.01" value="${r.p}" style="width:80px">${above ? '<div class="warn" style="font-size:11px">高於現價，限價單會直接成交</div>' : ''}</td>
       <td><input data-i="${i}" data-k="q" type="number" step="1" value="${r.q}" style="width:60px"> 張</td>
       <td>${fmt(cost / sh)}</td><td>${fmt(cost, 0)}</td></tr>`;
   }).join('');
-  $('ladder').innerHTML = `<tr><th>批次</th><th>價格</th><th>張數</th><th>累計均價</th><th>累計投入</th></tr>
-    <tr><td>目前</td><td>—</td><td>${pos.lots} 張</td><td>${fmt(pos.avg)}</td><td>${fmt(pos.lots * 1000 * pos.avg, 0)}</td></tr>${rows}
-    <tr><td colspan="3">全部成交後總張數 ${fmt(sh / 1000, 0)} 張，再跌 10% 約</td><td colspan="2" class="down">${fmt(-sh * ladder.at(-1).p * 0.1, 0)}</td></tr>
-    ${cost > pos.budget ? `<tr><td colspan="5" class="warn">⚠ 累計投入 ${fmt(cost, 0)} 已超過總預算 ${fmt(+pos.budget, 0)}</td></tr>` : ''}`;
+  $('ladder').innerHTML = `<tr><th>批次</th><th>依據</th><th>價格</th><th>張數</th><th>累計均價</th><th>累計投入</th></tr>
+    <tr><td>目前</td><td></td><td>—</td><td>${pos.lots} 張</td><td>${fmt(pos.avg)}</td><td>${fmt(pos.lots * 1000 * pos.avg, 0)}</td></tr>${rows}
+    <tr><td colspan="4">全部成交後總張數 ${fmt(sh / 1000, 0)} 張，再跌 10% 約</td><td colspan="2" class="down">${fmt(-sh * ladder.at(-1).p * 0.1, 0)}</td></tr>
+    ${cost > pos.budget ? `<tr><td colspan="6" class="warn">⚠ 累計投入 ${fmt(cost, 0)} 已超過總預算 ${fmt(+pos.budget, 0)}</td></tr>` : ''}`;
   $('ladder').querySelectorAll('input').forEach(el => el.onchange = () => {
     ladder[+el.dataset.i][el.dataset.k] = +el.value;
+    if (el.dataset.k === 'p') ladder[+el.dataset.i].src = '自訂';
     const p = getPos(); p.ladder = ladder; savePos(p); renderLadder(p, ladder);
   });
 }
