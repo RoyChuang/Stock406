@@ -1,0 +1,36 @@
+# Stock406
+
+00406A（主動中信台灣收益）的盤勢儀表板與手機推播系統。這是公開 repo：**不要把使用者的持股、均價、預算、ntfy 主題寫進任何檔案或 commit**。這些資料只放在 GitHub Secrets，以及使用者電腦上的 `journal/`（已列入 .gitignore）。
+
+## 架構
+
+| 檔案 | 用途 | 執行位置 |
+|---|---|---|
+| `index.html` | 儀表板：K 線、MACD/KD/RSI、布林、關鍵價位、部位試算、ADR 溢價、EWT 跳空推估 | GitHub Pages（讀 `data/*.json`）或本機 `node server.js`（即時代理 Yahoo） |
+| `server.js` | 本機伺服器，port 4060，`/api/chart` 代理 Yahoo chart API | 本機 |
+| `scripts/fetch-data.mjs` | 抓 Yahoo 日線存成 `data/*.json`（`^` 換成 `_`） | Actions |
+| `scripts/summary.mjs` | 把 data 濃縮成約 3 KB 文字摘要，給雲端 Claude 讀（不要讓 Claude 直接讀原始 JSON，約 325 KB） | 雲端排程 |
+| `scripts/alert.mjs` | ntfy 推播：`MODE=premarket` 盤前推估、`MODE=intraday` 盤中規則判斷 | Actions |
+| `.github/workflows/pages.yml` | 平日每 15 分鐘抓資料 → 部署 Pages，並把資料強制推到單一 commit 的 `data` 分支 | Actions |
+| `.github/workflows/alerts.yml` | 08:30 盤前、09:00–13:55 每 5 分鐘盤中提醒；修改 `.github/alert-test.txt` 並 push 會觸發測試模式 | Actions |
+
+雲端 Claude 排程（claude.ai routines）連不到 Yahoo 和 github.io，只能讀 repo：`git fetch origin data && git archive origin/data | tar -x -C data && node scripts/summary.mjs`。
+
+## 推播規則（alert.mjs）
+
+- Secrets：`NTFY_TOPIC`、`ALERT_CONFIG`（JSON，覆蓋 `DEFAULTS`）。
+- 分批 `ladder`：固定價格或動態值 `prev` / `bbL` / `lo20` / `lo60` / `pct-3`，用「當日以前」的日 K 計算，相差 <0.5% 合併。
+- 使用者的分批規則：每批要 **B 且 C**。B = 當日低點 `confirmMin`（15）分鐘未破，或站上 VWAP；C = 5 項環境（折溢價 ≤ 0（證交所 MIS `all_etf.txt`）、台幣 15 分未急貶、美期 15/60 分未急跌、台積電與大盤當日低 15 分未破）至少 `cMin`（3）項。
+- 推播分級：priority 4–5 會震動，只用於「符合規則」「15 分急殺」「跌破布林下軌」；其餘（到價未符合、資訊、每小時摘要）用 priority 2，不震動。
+- 盤中每個訊號每天只推一次（Actions cache 保存 `alert-state.json`）；測試模式不保存。
+
+## 修改後如何驗證
+
+- 本機：`FORCE=1 STATE_FILE=/tmp/a.json node scripts/alert.mjs`（不設 `NTFY_TOPIC` 只印不推）、`MODE=premarket FORCE=1 node scripts/alert.mjs`。
+- 雲端：修改 `.github/alert-test.txt` 後 push，會推送標題帶「[測試]」的通知。
+- **盤中修改 `alert.mjs` 要特別小心**：push 後下一次排程就會用新程式碼，語法錯誤會讓當天的提醒全部停擺。push 前一定要先在本機用 FORCE 跑過。
+
+## 原則
+
+- 只提供數據、指標與「是否符合使用者自訂規則」，不給個人化的買賣建議。
+- 價格一律從即時來源抓，標註時間，不用新聞裡的舊數字。
