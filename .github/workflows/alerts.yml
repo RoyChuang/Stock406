@@ -2,6 +2,9 @@ name: Intraday alerts
 
 on:
   workflow_dispatch:
+  # 測試用：修改 .github/alert-test.txt 並 push，會以測試模式（忽略交易時段、標題加「[測試]」）跑一次
+  push:
+    paths: ['.github/alert-test.txt']
   schedule:
     # 台北時間平日 09:00–13:55（UTC 01–05 點），每 5 分鐘；腳本會再判斷 13:35 後與休市日略過
     - cron: '*/5 1-5 * * 1-5'
@@ -31,8 +34,11 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           ALERT_CONFIG: ${{ secrets.ALERT_CONFIG }}
+          FORCE: ${{ github.event_name != 'schedule' && '1' || '' }}
+          ALERT_PREFIX: ${{ github.event_name != 'schedule' && '[測試] ' || '' }}
+      # 測試模式不保存去重紀錄，免得影響正式提醒
       - uses: actions/cache/save@v4
-        if: always()
+        if: always() && github.event_name == 'schedule'
         with:
           path: alert-state.json
           key: alert-state-${{ github.run_id }}

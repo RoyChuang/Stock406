@@ -73,7 +73,7 @@ for (const s of fresh) {
   if (!TOPIC) { state.sent.push(s.key); continue; }
   const r = await fetch('https://ntfy.sh/', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic: TOPIC, title: s.title, message: `${s.msg}\n${tpe.toISOString().slice(11, 16)} 台北時間`, priority: s.priority, tags: ['chart_with_downwards_trend'], click: 'https://roychuang.github.io/Stock406/' }),
+    body: JSON.stringify({ topic: TOPIC, title: (process.env.ALERT_PREFIX || '') + s.title, message: `${s.msg}\n${tpe.toISOString().slice(11, 16)} 台北時間`, priority: s.priority, tags: ['chart_with_downwards_trend'], click: 'https://roychuang.github.io/Stock406/' }),
   });
   if (!r.ok) { console.error('推播失敗', r.status, await r.text()); continue; }
   state.sent.push(s.key);
