@@ -10,7 +10,7 @@ on:
     - cron: '0 */6 * * 0,6'
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -30,6 +30,14 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/fetch-data.mjs
+      # 雲端排程連不到 Yahoo / github.io，只能讀 repo，所以把最新資料強制推到單一 commit 的 data 分支
+      - name: Publish data branch
+        run: |
+          cd data
+          git init -q -b data
+          git add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -qm "data $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data
       - name: Assemble site
         run: mkdir _site && cp index.html _site/ && cp -r data _site/
       - uses: actions/configure-pages@v5
