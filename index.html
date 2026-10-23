@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock406 盤勢儀表板</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--mute:#8b949e;--up:#f85149;--down:#3fb950;--acc:#58a6ff;--warn:#d29922}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"Segoe UI","Microsoft JhengHei",sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+h1{font-size:18px;margin:0}
+h2{font-size:15px;margin:0 0 10px}
+main{padding:16px 20px;max-width:1400px;margin:0 auto}
+button,input{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+.mute{color:var(--mute)}.up{color:var(--up)}.down{color:var(--down)}.warn{color:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:10px;margin-bottom:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;cursor:pointer}
+.card.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.card .px{font-size:22px;font-weight:600}
+.tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.tag{font-size:11px;padding:1px 6px;border-radius:10px;border:1px solid var(--line)}
+.tag.bull{color:var(--up);border-color:#f8514955}.tag.bear{color:var(--down);border-color:#3fb95055}.tag.neu{color:var(--warn);border-color:#d2992255}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px}
+.two{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+@media(max-width:900px){.two{grid-template-columns:1fr}main,header{padding-left:16px;padding-right:16px}}
+.chart{width:100%;height:340px}.chart.sm{height:130px}
+table{width:100%;border-collapse:collapse}
+td,th{padding:5px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+td:first-child,th:first-child{text-align:left}
+.tblwrap{overflow-x:auto}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px}
+.kv b{text-align:right}
+.strat{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.strat div{border:1px solid var(--line);border-radius:8px;padding:10px}
+.strat h3{margin:0 0 4px;font-size:14px}
+.legend{font-size:12px;color:var(--mute);margin:4px 0}
+.disc{font-size:12px;color:var(--mute);border-top:1px solid var(--line);padding-top:10px}
+.err{color:var(--up)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Stock406 盤勢儀表板</h1>
+  <div><span id="status" class="mute">載入中…</span> <button id="refresh">重新整理</button>
+  <label class="mute"><input type="checkbox" id="auto" checked> 每 60 秒更新</label></div>
+</header>
+<main>
+  <div class="grid" id="cards"></div>
+
+  <div class="two">
+    <div class="panel">
+      <h2 id="chartTitle">K 線</h2>
+      <div class="legend">K 線 · <span style="color:#f0b429">MA5</span> · <span style="color:#58a6ff">MA20</span> · <span style="color:#bc8cff">MA60</span> · <span style="color:#8b949e">布林通道(20,2)</span></div>
+      <div id="cPrice" class="chart"></div>
+      <div class="legend">MACD(12,26,9)：<span style="color:#58a6ff">DIF</span> · <span style="color:#f0b429">DEA</span> · 柱狀體</div>
+      <div id="cMacd" class="chart sm"></div>
+      <div class="legend">KD(9,3,3)：<span style="color:#58a6ff">K</span> · <span style="color:#f0b429">D</span> · <span style="color:#bc8cff">RSI14</span>（20/80 參考線）</div>
+      <div id="cOsc" class="chart sm"></div>
+    </div>
+    <div>
+      <div class="panel"><h2 id="indTitle">指標</h2><div class="tblwrap"><table id="indTbl"></table></div></div>
+      <div class="panel"><h2>關鍵價位（由指標自動算出）</h2><div class="tblwrap"><table id="lvlTbl"></table></div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>我的 00406A 部位</h2>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:10px">
+      <label>張數 <input id="lots" type="number" step="1" style="width:80px"></label>
+      <label>均價 <input id="avg" type="number" step="0.01" style="width:90px"></label>
+      <label>已領配息合計(元) <input id="divs" type="number" step="1" style="width:110px"></label>
+      <label>總預算（含已投入）<input id="budget" type="number" step="10000" style="width:110px"></label>
+      <button id="split123">剩餘預算依 1:2:3 分配</button>
+      <button id="splitEq">剩餘預算平均分配</button>
+    </div>
+    <div class="two">
+      <div class="kv" id="pos"></div>
+      <div>
+        <h2>分批加碼試算</h2>
+        <div class="tblwrap"><table id="ladder"></table></div>
+        <div class="legend">價位預設取自 MA5、布林下軌、近 60 日低點等，可直接修改價格與張數。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>下週觀察重點（00406A）</h2>
+    <div id="watch"></div>
+  </div>
+
+  <div class="panel">
+    <h2>業界常見進場策略（一般性說明）</h2>
+    <div class="strat">
+      <div><h3>① 金字塔分批</h3>把預定總預算分成 3–4 份，價格越低買越多（例如 1:2:3），每一份都事先綁定價位。優點是均價下降比較有效率；缺點是如果一路下跌，總曝險也會跟著放到最大。</div>
+      <div><h3>② 訊號確認再進</h3>不搶最低點，等止跌訊號出現再進場，例如 KD 在 20 以下黃金交叉、MACD 柱狀體連續縮短、收盤站回 MA5 或 MA20。會少賺最低的一段，但比較不容易接到「下跌的刀」。</div>
+      <div><h3>③ 定期定額</h3>固定日期、固定金額買進，不看盤勢。適合以領息為主、不想擇時的投資人，可以平均掉短線波動。</div>
+      <div><h3>④ 配息再投入</h3>把每月配息再買回同一檔，或改買其他標的分散。可以觀察淨值有沒有被配息侵蝕：如果淨值一路走低，代表「高配息」有一部分是在還你本金。</div>
+      <div><h3>⑤ 曝險上限與停損</h3>先決定單一商品最多佔總資產的比例，以及在什麼條件下不再加碼，例如跌破近 60 日低點或大盤跌破季線。規則要在進場前就寫好。</div>
+      <div><h3>⑥ 避開除息前追價</h3>除息當天股價會扣掉配息，只為了卡位領息而追價，本質上只是把錢換個口袋，還可能增加稅負和二代健保補充保費。</div>
+    </div>
+  </div>
+
+  <p class="disc">本頁內容僅為公開市場數據與技術指標的自動計算結果，以及一般性的投資知識，不構成任何個人化的投資建議。資料來源為 Yahoo Finance，可能有延遲或錯誤。所有買賣決定請自行判斷，並自負風險。</p>
+</main>
+
+<script>
+const SYMBOLS = [
+  { s: '00406A.TW', n: '00406A 中信收益', dp: 2 },
+  { s: '^TWII', n: '台股加權', dp: 0 },
+  { s: '2330.TW', n: '台積電', dp: 0 },
+  { s: '^GSPC', n: 'S&P 500', dp: 0 },
+  { s: '^IXIC', n: 'Nasdaq', dp: 0 },
+  { s: '^SOX', n: '費城半導體', dp: 0 },
+  { s: '^VIX', n: 'VIX 恐慌指數', dp: 2 },
+];
+const DATA = {};
+let selected = '00406A.TW';
+const $ = id => document.getElementById(id);
+const fmt = (x, dp = 2) => x == null || isNaN(x) ? '—' : x.toLocaleString('zh-TW', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const cls = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+const sgn = x => (x > 0 ? '+' : '') + fmt(x);
+
+// ---------- 指標計算 ----------
+const ema = (a, n) => { const k = 2 / (n + 1), e = []; a.forEach((v, i) => e.push(i ? v * k + e[i - 1] * (1 - k) : v)); return e; };
+const sma = (a, n) => a.map((_, i) => { if (i < n - 1) return null; let s = 0; for (let j = i - n + 1; j <= i; j++) s += a[j]; return s / n; });
+function compute(rows) {
+  const c = rows.map(r => r.c), h = rows.map(r => r.h), l = rows.map(r => r.l);
+  const ma5 = sma(c, 5), ma20 = sma(c, 20), ma60 = sma(c, 60), ma120 = sma(c, 120);
+  const e12 = ema(c, 12), e26 = ema(c, 26), dif = c.map((_, i) => e12[i] - e26[i]), dea = ema(dif, 9), hist = dif.map((v, i) => v - dea[i]);
+  const rsi = []; let ag = 0, al = 0;
+  for (let i = 0; i < c.length; i++) {
+    if (!i) { rsi.push(null); continue; }
+    const ch = c[i] - c[i - 1], g = Math.max(ch, 0), lo = Math.max(-ch, 0);
+    if (i <= 14) { ag += g / 14; al += lo / 14; } else { ag = (ag * 13 + g) / 14; al = (al * 13 + lo) / 14; }
+    rsi.push(i < 14 ? null : 100 - 100 / (1 + ag / (al || 1e-9)));
+  }
+  const K = [], D = []; let k = 50, d = 50;
+  for (let i = 0; i < c.length; i++) {
+    if (i >= 8) {
+      const hh = Math.max(...h.slice(i - 8, i + 1)), ll = Math.min(...l.slice(i - 8, i + 1));
+      const rsv = hh === ll ? 50 : (c[i] - ll) / (hh - ll) * 100;
+      k = k * 2 / 3 + rsv / 3; d = d * 2 / 3 + k / 3;
+    }
+    K.push(k); D.push(d);
+  }
+  const bbU = [], bbL = [];
+  for (let i = 0; i < c.length; i++) {
+    if (ma20[i] == null) { bbU.push(null); bbL.push(null); continue; }
+    let sd = 0; for (let j = i - 19; j <= i; j++) sd += (c[j] - ma20[i]) ** 2; sd = Math.sqrt(sd / 20);
+    bbU.push(ma20[i] + 2 * sd); bbL.push(ma20[i] - 2 * sd);
+  }
+  return { c, h, l, ma5, ma20, ma60, ma120, dif, dea, hist, rsi, K, D, bbU, bbL };
+}
+
+// 依指標產生描述性標籤（bull=偏多 / bear=偏空 / neu=中性或超買超賣）
+function signals(sym, x) {
+  const N = x.c.length - 1, p = x.c[N], t = [];
+  const inv = sym === '^VIX';
+  const B = inv ? 'bear' : 'bull', S = inv ? 'bull' : 'bear';
+  if (x.ma20[N] != null && x.ma60[N] != null) {
+    if (p > x.ma20[N] && x.ma20[N] > x.ma60[N]) t.push([B, inv ? '恐慌升溫' : '多頭排列']);
+    else if (p < x.ma20[N] && x.ma20[N] < x.ma60[N]) t.push([S, inv ? '恐慌消退' : '空頭排列']);
+    else t.push(['neu', p > x.ma20[N] ? '站上月線' : '跌破月線']);
+  }
+  const hN = x.hist[N], h1 = x.hist[N - 1];
+  if (x.dif[N] > x.dea[N] && x.dif[N - 1] <= x.dea[N - 1]) t.push([B, 'MACD 黃金交叉']);
+  else if (x.dif[N] < x.dea[N] && x.dif[N - 1] >= x.dea[N - 1]) t.push([S, 'MACD 死亡交叉']);
+  else if (hN < 0) t.push([Math.abs(hN) < Math.abs(h1) ? 'neu' : S, Math.abs(hN) < Math.abs(h1) ? 'MACD 綠柱縮短' : 'MACD 綠柱擴大']);
+  else t.push([hN < h1 ? 'neu' : B, hN < h1 ? 'MACD 紅柱縮短' : 'MACD 紅柱擴大']);
+  if (x.K[N] < 20) t.push(['neu', x.K[N] > x.D[N] && x.K[N - 1] <= x.D[N - 1] ? 'KD 低檔黃金交叉' : 'KD 超賣區']);
+  else if (x.K[N] > 80) t.push(['neu', 'KD 超買區']);
+  if (x.rsi[N] < 30) t.push(['neu', 'RSI 超賣']); else if (x.rsi[N] > 70) t.push(['neu', 'RSI 超買']);
+  if (x.bbL[N] != null && p < x.bbL[N]) t.push(['neu', '跌破布林下軌']);
+  else if (x.bbU[N] != null && p > x.bbU[N]) t.push(['neu', '突破布林上軌']);
+  return t;
+}
+
+// ---------- 資料 ----------
+// 本機跑 server.js 時走即時代理；GitHub Pages 靜態版讀 Actions 定時產生的 data/*.json
+const LIVE = ['localhost', '127.0.0.1'].includes(location.hostname);
+async function load(sym) {
+  const r = await fetch(LIVE ? `/api/chart?symbol=${encodeURIComponent(sym)}&range=1y&interval=1d`
+    : `data/${sym.replace(/\^/g, '_')}.json?t=${Date.now()}`, { cache: 'no-store' });
+  const j = await r.json();
+  const res = j.chart?.result?.[0];
+  if (!res) throw new Error(j.error || j.chart?.error?.description || 'no data');
+  const q = res.indicators.quote[0], off = res.meta.gmtoffset || 0;
+  const rows = res.timestamp.map((t, i) => ({ t, d: new Date((t + off) * 1000).toISOString().slice(0, 10), o: q.open[i], h: q.high[i], l: q.low[i], c: q.close[i], v: q.volume[i] }))
+    .filter(r => r.c != null && r.o != null);
+  return { meta: res.meta, rows, ind: compute(rows) };
+}
+
+async function refreshAll() {
+  $('status').textContent = '更新中…';
+  const out = await Promise.allSettled(SYMBOLS.map(x => load(x.s)));
+  out.forEach((o, i) => { if (o.status === 'fulfilled') DATA[SYMBOLS[i].s] = o.value; else DATA[SYMBOLS[i].s] = { error: String(o.reason) }; });
+  renderCards(); renderDetail(); renderPosition(); renderWatch();
+  let src = '即時';
+  if (!LIVE) {
+    try { const u = await (await fetch(`data/updated.json?t=${Date.now()}`, { cache: 'no-store' })).json(); src = '資料抓取於 ' + new Date(u.t).toLocaleString('zh-TW'); } catch {}
+  }
+  $('status').textContent = `${src} · 頁面更新 ${new Date().toLocaleTimeString('zh-TW')}`;
+}
+
+// ---------- 畫面 ----------
+function marketTime(meta) {
+  const t = new Date(meta.regularMarketTime * 1000);
+  return t.toLocaleString('zh-TW', { timeZone: meta.exchangeTimezoneName, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+function renderCards() {
+  $('cards').innerHTML = SYMBOLS.map(({ s, n, dp }) => {
+    const d = DATA[s];
+    if (!d || d.error) return `<div class="card" data-s="${s}"><div class="mute">${n}</div><div class="err">載入失敗</div></div>`;
+    const N = d.rows.length - 1, p = d.meta.regularMarketPrice ?? d.rows[N].c, prev = d.rows[N - 1].c;
+    const ch = p - prev, pct = ch / prev * 100;
+    return `<div class="card ${s === selected ? 'sel' : ''}" data-s="${s}">
+      <div class="mute">${n}</div>
+      <div class="px ${cls(ch)}">${fmt(p, dp)}</div>
+      <div class="${cls(ch)}">${sgn(ch)} (${sgn(pct)}%)</div>
+      <div class="mute" style="font-size:11px">${marketTime(d.meta)}</div>
+      <div class="tags">${signals(s, d.ind).map(([k, t]) => `<span class="tag ${k}">${t}</span>`).join('')}</div>
+    </div>`;
+  }).join('');
+  document.querySelectorAll('.card').forEach(el => el.onclick = () => { selected = el.dataset.s; renderCards(); renderDetail(); });
+}
+
+let charts = null;
+function mkChart(el) {
+  return LightweightCharts.createChart(el, {
+    layout: { background: { color: 'transparent' }, textColor: '#8b949e' },
+    grid: { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
+    rightPriceScale: { borderColor: '#30363d' }, timeScale: { borderColor: '#30363d' },
+    crosshair: { mode: 0 }, autoSize: true,
+  });
+}
+function initCharts() {
+  const p = mkChart($('cPrice')), m = mkChart($('cMacd')), o = mkChart($('cOsc'));
+  const s = {
+    candle: p.addCandlestickSeries({ upColor: '#f85149', downColor: '#3fb950', borderVisible: false, wickUpColor: '#f85149', wickDownColor: '#3fb950' }),
+    ma5: p.addLineSeries({ color: '#f0b429', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+    ma20: p.addLineSeries({ color: '#58a6ff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+    ma60: p.addLineSeries({ color: '#bc8cff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+    bbU: p.addLineSeries({ color: '#8b949e', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }),
+    bbL: p.addLineSeries({ color: '#8b949e', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }),
+    hist: m.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false }),
+    dif: m.addLineSeries({ color: '#58a6ff', lineWidth: 1, priceLineVisible: false }),
+    dea: m.addLineSeries({ color: '#f0b429', lineWidth: 1, priceLineVisible: false }),
+    K: o.addLineSeries({ color: '#58a6ff', lineWidth: 1, priceLineVisible: false }),
+    D: o.addLineSeries({ color: '#f0b429', lineWidth: 1, priceLineVisible: false }),
+    rsi: o.addLineSeries({ color: '#bc8cff', lineWidth: 1, priceLineVisible: false }),
+  };
+  s.K.createPriceLine({ price: 80, color: '#30363d', lineStyle: 2, axisLabelVisible: false });
+  s.K.createPriceLine({ price: 20, color: '#30363d', lineStyle: 2, axisLabelVisible: false });
+  const all = [p, m, o];
+  all.forEach(c => c.timeScale().subscribeVisibleLogicalRangeChange(r => { if (!r) return; all.forEach(x => x !== c && x.timeScale().setVisibleLogicalRange(r)); }));
+  charts = { all, s };
+}
+function renderDetail() {
+  const d = DATA[selected], meta = SYMBOLS.find(x => x.s === selected);
+  $('chartTitle').textContent = `${meta.n} 日 K 線`;
+  $('indTitle').textContent = `${meta.n} 指標`;
+  if (!d || d.error) { $('indTbl').innerHTML = `<tr><td class="err">${d?.error || '無資料'}</td></tr>`; return; }
+  if (!charts) initCharts();
+  const { rows, ind: x } = d, s = charts.s;
+  const line = a => rows.map((r, i) => a[i] == null ? { time: r.d } : { time: r.d, value: a[i] });
+  s.candle.setData(rows.map(r => ({ time: r.d, open: r.o, high: r.h, low: r.l, close: r.c })));
+  ['ma5', 'ma20', 'ma60', 'bbU', 'bbL', 'dif', 'dea', 'K', 'D', 'rsi'].forEach(k => s[k].setData(line(x[k])));
+  s.hist.setData(rows.map((r, i) => ({ time: r.d, value: x.hist[i], color: x.hist[i] >= 0 ? '#f8514999' : '#3fb95099' })));
+  const n = rows.length;
+  charts.all.forEach(c => c.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 120), to: n + 3 }));
+
+  const N = n - 1, dp = meta.dp, p = x.c[N];
+  const rel = v => v == null ? '' : `<span class="${cls(p - v)}">${sgn((p / v - 1) * 100)}%</span>`;
+  const R = [
+    ['收盤 / 現價', fmt(p, dp), rows[N].d],
+    ['MA5', fmt(x.ma5[N], dp), rel(x.ma5[N])], ['MA20 月線', fmt(x.ma20[N], dp), rel(x.ma20[N])],
+    ['MA60 季線', fmt(x.ma60[N], dp), rel(x.ma60[N])], ['MA120 半年線', fmt(x.ma120[N], dp), rel(x.ma120[N])],
+    ['MACD DIF / DEA', `${fmt(x.dif[N], 3)} / ${fmt(x.dea[N], 3)}`, x.dif[N] > 0 ? '零軸上' : '零軸下'],
+    ['MACD 柱 (今/昨)', `${fmt(x.hist[N], 3)} / ${fmt(x.hist[N - 1], 3)}`, Math.abs(x.hist[N]) < Math.abs(x.hist[N - 1]) ? '縮短' : '擴大'],
+    ['RSI14', fmt(x.rsi[N], 1), x.rsi[N] < 30 ? '超賣' : x.rsi[N] > 70 ? '超買' : '中性'],
+    ['K / D', `${fmt(x.K[N], 1)} / ${fmt(x.D[N], 1)}`, x.K[N] > x.D[N] ? 'K&gt;D' : 'K&lt;D'],
+    ['布林上 / 下軌', `${fmt(x.bbU[N], dp)} / ${fmt(x.bbL[N], dp)}`, ''],
+    ['5 日 / 20 日漲跌', `<span class="${cls(p - x.c[N - 5])}">${sgn((p / x.c[N - 5] - 1) * 100)}%</span> / <span class="${cls(p - x.c[N - 20])}">${sgn((p / x.c[N - 20] - 1) * 100)}%</span>`, ''],
+  ];
+  $('indTbl').innerHTML = R.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td class="mute">${r[2]}</td></tr>`).join('');
+
+  const lv = levels(x, rows, dp);
+  $('lvlTbl').innerHTML = '<tr><th>價位</th><th>數值</th><th>距現價</th></tr>' + lv.map(([k, v]) => `<tr><td>${k}</td><td>${fmt(v, dp)}</td><td>${rel(v)}</td></tr>`).join('');
+}
+function levels(x, rows, dp) {
+  const N = x.c.length - 1;
+  const lo20 = Math.min(...x.l.slice(-20)), hi20 = Math.max(...x.h.slice(-20)), lo60 = Math.min(...x.l.slice(-60)), hi60 = Math.max(...x.h.slice(-60));
+  return [['近 60 日高', hi60], ['近 20 日高', hi20], ['布林上軌', x.bbU[N]], ['MA60 季線', x.ma60[N]], ['MA20 月線', x.ma20[N]], ['MA5', x.ma5[N]],
+    ['布林下軌', x.bbL[N]], ['近 20 日低', lo20], ['近 60 日低', lo60]].filter(r => r[1] != null).sort((a, b) => b[1] - a[1]);
+}
+
+// ---------- 部位 ----------
+function getPos() {
+  let s = {}; try { s = JSON.parse(localStorage.getItem('pos406') || '{}'); } catch {}
+  // 部位只存在瀏覽器 localStorage，不寫進公開原始碼
+  return { lots: s.lots ?? 0, avg: s.avg ?? 0, divs: s.divs ?? 0, budget: s.budget ?? 0, ladder: s.ladder };
+}
+function savePos(p) { try { localStorage.setItem('pos406', JSON.stringify(p)); } catch {} }
+function renderPosition() {
+  const pos = getPos(), d = DATA['00406A.TW'];
+  $('lots').value = pos.lots; $('avg').value = pos.avg; $('divs').value = pos.divs; $('budget').value = pos.budget;
+  if (!d || d.error) { $('pos').innerHTML = '<span class="err">00406A 資料載入失敗</span>'; return; }
+  const p = d.meta.regularMarketPrice ?? d.ind.c.at(-1), sh = pos.lots * 1000, cost = sh * pos.avg, mv = sh * p, pl = mv - cost, tot = pl + +pos.divs;
+  $('pos').innerHTML = `
+    <span>現價</span><b>${fmt(p)}</b>
+    <span>持有成本</span><b>${fmt(cost, 0)}</b>
+    <span>市值</span><b>${fmt(mv, 0)}</b>
+    <span>價差損益</span><b class="${cls(pl)}">${sgn(pl).replace(/\.\d+$/, '')}（${sgn(pl / cost * 100)}%）</b>
+    <span>含配息總損益</span><b class="${cls(tot)}">${sgn(tot).replace(/\.\d+$/, '')}（${sgn(tot / cost * 100)}%）</b>
+    <span>回本價（扣已領息）</span><b>${fmt((cost - pos.divs) / sh)}</b>
+    <span>若再跌 10%</span><b class="down">${fmt(-mv * 0.1, 0)}</b>
+    <span>總預算 / 剩餘可投入</span><b>${fmt(+pos.budget, 0)} / ${fmt(pos.budget - cost, 0)}</b>`;
+  const x = d.ind, N = x.c.length - 1;
+  const ladder = pos.ladder || [
+    { p: +x.ma5[N].toFixed(2), q: 5 }, { p: +x.bbL[N].toFixed(2), q: 10 }, { p: +Math.min(...x.l.slice(-60)).toFixed(2), q: 15 }];
+  renderLadder(pos, ladder);
+}
+// 把剩餘預算依權重分到各批，張數無條件捨去
+function splitBudget(weights) {
+  const pos = getPos(), d = DATA['00406A.TW'];
+  if (!d || d.error) return;
+  const x = d.ind, N = x.c.length - 1;
+  const ladder = pos.ladder || [
+    { p: +x.ma5[N].toFixed(2) }, { p: +x.bbL[N].toFixed(2) }, { p: +Math.min(...x.l.slice(-60)).toFixed(2) }];
+  const left = pos.budget - pos.lots * 1000 * pos.avg, W = weights.reduce((a, b) => a + b, 0);
+  ladder.forEach((r, i) => r.q = Math.max(0, Math.floor(left * weights[i] / W / (r.p * 1000))));
+  pos.ladder = ladder; savePos(pos); renderPosition();
+}
+$('split123').onclick = () => splitBudget([1, 2, 3]);
+$('splitEq').onclick = () => splitBudget([1, 1, 1]);
+function renderLadder(pos, ladder) {
+  let sh = pos.lots * 1000, cost = sh * pos.avg;
+  const rows = ladder.map((r, i) => {
+    sh += r.q * 1000; cost += r.q * 1000 * r.p;
+    return `<tr><td>第 ${i + 1} 批</td><td><input data-i="${i}" data-k="p" type="number" step="0.01" value="${r.p}" style="width:80px"></td>
+      <td><input data-i="${i}" data-k="q" type="number" step="1" value="${r.q}" style="width:60px"> 張</td>
+      <td>${fmt(cost / sh)}</td><td>${fmt(cost, 0)}</td></tr>`;
+  }).join('');
+  $('ladder').innerHTML = `<tr><th>批次</th><th>價格</th><th>張數</th><th>累計均價</th><th>累計投入</th></tr>
+    <tr><td>目前</td><td>—</td><td>${pos.lots} 張</td><td>${fmt(pos.avg)}</td><td>${fmt(pos.lots * 1000 * pos.avg, 0)}</td></tr>${rows}
+    <tr><td colspan="3">全部成交後總張數 ${fmt(sh / 1000, 0)} 張，再跌 10% 約</td><td colspan="2" class="down">${fmt(-sh * ladder.at(-1).p * 0.1, 0)}</td></tr>
+    ${cost > pos.budget ? `<tr><td colspan="5" class="warn">⚠ 累計投入 ${fmt(cost, 0)} 已超過總預算 ${fmt(+pos.budget, 0)}</td></tr>` : ''}`;
+  $('ladder').querySelectorAll('input').forEach(el => el.onchange = () => {
+    ladder[+el.dataset.i][el.dataset.k] = +el.value;
+    const p = getPos(); p.ladder = ladder; savePos(p); renderLadder(p, ladder);
+  });
+}
+['lots', 'avg', 'divs', 'budget'].forEach(id => $(id).addEventListener('change', () => {
+  const p = getPos(); p[id] = +$(id).value; savePos(p); renderPosition();
+}));
+
+// ---------- 下週觀察 ----------
+function renderWatch() {
+  const d = DATA['00406A.TW'], tw = DATA['^TWII'], sox = DATA['^SOX'], vix = DATA['^VIX'];
+  if (!d || d.error) { $('watch').innerHTML = '<span class="err">資料不足</span>'; return; }
+  const x = d.ind, N = x.c.length - 1, p = x.c[N];
+  const items = [];
+  const ok = (cond, good, bad) => items.push(`<li class="${cond ? 'up' : 'mute'}">${cond ? '✔ ' : '○ '}${cond ? good : bad}</li>`);
+  items.push('<li><b>止跌確認類訊號（目前狀態）</b><ul>');
+  ok(x.K[N] > x.D[N] && x.K[N] < 30, 'KD 已在低檔 K>D', `KD 尚未低檔交叉（K ${fmt(x.K[N], 1)} / D ${fmt(x.D[N], 1)}）`);
+  ok(x.hist[N] < 0 && Math.abs(x.hist[N]) < Math.abs(x.hist[N - 1]), 'MACD 綠柱已縮短', 'MACD 綠柱尚未縮短');
+  ok(p > x.ma5[N], `收盤已站上 MA5（${fmt(x.ma5[N])}）`, `收盤尚未站上 MA5（${fmt(x.ma5[N])}）`);
+  ok(p > x.ma20[N], `收盤已站上月線（${fmt(x.ma20[N])}）`, `收盤尚未站上月線（${fmt(x.ma20[N])}）`);
+  if (vix && !vix.error) { const v = vix.ind.c.at(-1); ok(v < 18, `VIX 已回落至 18 以下（${fmt(v)}）`, `VIX 仍在 ${fmt(v)}，未回落至 18 以下`); }
+  if (sox && !sox.error) { const s = sox.ind; ok(s.c.at(-1) > s.ma5.at(-1), '費半已站回 MA5', '費半仍在 MA5 之下'); }
+  items.push('</ul></li>');
+  items.push('<li><b>轉弱警示類（若發生代表跌勢延續）</b><ul>');
+  items.push(`<li>00406A 收盤跌破布林下軌 ${fmt(x.bbL[N])}／近 60 日低 ${fmt(Math.min(...x.l.slice(-60)))}</li>`);
+  if (tw && !tw.error) { const t = tw.ind; items.push(`<li>加權指數跌破季線 ${fmt(t.ma60.at(-1), 0)}、半年線 ${fmt(t.ma120.at(-1), 0)}（目前 ${fmt(t.c.at(-1), 0)}）</li>`); }
+  items.push('<li>VIX 突破 25，代表恐慌情緒升溫</li></ul></li>');
+  items.push('<li><b>事件</b><ul><li>00406A 下次除息預估 11/3，最後買進日 11/2（週一），金額以投信公告為準</li><li>美股科技巨頭財報週、FOMC 利率決策（日期請查證）</li></ul></li>');
+  $('watch').innerHTML = `<ul style="margin:0;padding-left:18px">${items.join('')}</ul>`;
+}
+
+$('refresh').onclick = refreshAll;
+setInterval(() => { if ($('auto').checked) refreshAll(); }, 60000);
+refreshAll();
+</script>
+</body>
+</html>
