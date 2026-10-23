@@ -1,6 +1,8 @@
 // 台股訊號推播（ntfy），由 GitHub Actions 執行：
-//   MODE=intraday（預設）盤中每 5 分鐘：觸及分批價位、跌破支撐、站上 MA5、大漲大跌、15 分鐘急殺急拉
+//   MODE=intraday（預設）盤中每 5 分鐘：依使用者的分批規則（B 止跌確認 + C 環境過濾）判斷是否符合，
+//                         另有跌破支撐、大漲大跌、急殺急拉，以及每小時摘要
 //   MODE=premarket        每個交易日 08:30：用美股收盤推估開盤跳空，對照分批價位與訊號清單
+// 推播分級（ntfy priority）：4–5 會震動，只用在「符合規則」「急殺」「轉弱警示」；2 不震動，用於資訊與摘要
 // 環境變數：
 //   NTFY_TOPIC    ntfy 主題（放 GitHub Secret，不要寫進公開 repo）；未設定時只印出不推播
 //   ALERT_CONFIG  JSON，覆蓋下方 DEFAULTS，例如 {"ladder":["prev","bbL","lo60"]}（放 Secret）
@@ -17,6 +19,11 @@ const DEFAULTS = {
   twUpPct: 1.5,        // 加權當日漲幅達到時提醒
   fastPct: 0.7,        // 加權 15 分鐘內急殺 / 急拉幅度
   etfDownPct: -2,      // 00406A 當日跌幅
+  // 使用者的分批規則（2026-10-23 定）：每一批都要 B 且 C
+  //   B 止跌確認：00406A 當日低點已經 confirmMin 分鐘沒有被跌破，或現價站上 VWAP
+  //   C 環境過濾：5 項環境條件中至少 cMin 項符合
+  confirmMin: 15,
+  cMin: 3,
 };
 const cfg = { ...DEFAULTS, ...JSON.parse(process.env.ALERT_CONFIG || '{}') };
 const MODE = process.env.MODE || 'intraday', FORCE = !!process.env.FORCE;
@@ -28,7 +35,7 @@ async function chart(symbol, range, interval) {
   const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!r.ok) throw new Error(`${symbol} HTTP ${r.status}`);
   const res = (await r.json()).chart.result[0], q = res.indicators.quote[0], off = res.meta.gmtoffset || 0;
-  const rows = (res.timestamp || []).map((t, i) => ({ t, d: new Date((t + off) * 1000).toISOString().slice(0, 10), c: q.close[i], h: q.high[i], l: q.low[i] }))
+  const rows = (res.timestamp || []).map((t, i) => ({ t, d: new Date((t + off) * 1000).toISOString().slice(0, 10), c: q.close[i], h: q.high[i], l: q.low[i], v: q.volume?.[i] || 0 }))
     .filter(r => r.c != null);
   return { meta: res.meta, rows, px: res.meta.regularMarketPrice ?? rows.at(-1)?.c };
 }
@@ -69,6 +76,15 @@ function ladderOf(L) {
 }
 const fmtLadder = ladder => ladder.map((l, i) => `第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、');
 
+// 證交所 MIS 的 ETF 盤中預估淨值（約 15 秒更新）：e 市價、f 預估淨值、g 折溢價 %、j 時間
+async function inav(code) {
+  try {
+    const j = await (await fetch('https://mis.twse.com.tw/stock/data/all_etf.txt', { headers: { 'User-Agent': 'Mozilla/5.0' } })).json();
+    const m = j.a1.flatMap(g => g.msgArray || []).find(x => x.a === code);
+    return m && { px: +m.e, nav: +m.f, prem: +m.g, time: m.j, date: m.i };
+  } catch (e) { console.log('預估淨值讀取失敗', e.message); return null; }
+}
+
 async function push(title, message, priority, tags) {
   console.log(`推播：${title}\n${message}\n`);
   if (!TOPIC) return true;
@@ -98,6 +114,7 @@ async function premarket() {
   if (!FORCE && await isHoliday()) { console.log('今天休市，略過'); return; }
   const [tw, etf, t2330, adr, ewt, fx, vix, sox] = await Promise.all(
     ['^TWII', '00406A.TW', '2330.TW', 'TSM', 'EWT', 'TWD=X', '^VIX', '^SOX'].map(s => chart(s, '1y', '1d')));
+  const nav = await inav('00406A');
   // 台股最後一個收盤日 dT；盤前只看 dT 以前（含）的日 K
   const twRows = tw.rows.filter(r => r.d < today), dT = twRows.at(-1).d;
   const upTo = d => d.rows.filter(r => r.d <= dT);
@@ -131,6 +148,7 @@ async function premarket() {
   const msg = [
     `EWT 法加權 ≈ ${estTw.toFixed(0)}（${pct(gap * 100)}）｜ADR 法台積電 ${pct(adrGap * 100)}`,
     `00406A 昨收 ${L.prev}（${md}）→ 推估開盤 ≈ ${estEtf}`,
+    nav ? `昨收折溢價 ${nav.prem > 0 ? '+' : ''}${nav.prem}%（預估淨值 ${nav.nav}${nav.prem > 0 ? '，市價比淨值貴' : ''}）` : '折溢價：讀取失敗',
     `分批（● = 推估開盤會觸及）：`, ...hits,
     `觸及的批次若掛限價單，會以開盤價成交。`,
     `止跌訊號 ${ok.filter(o => o[0]).length}/${ok.length}：${ok.map(o => (o[0] ? '✔' : '✘') + o[1]).join('、')}`,
@@ -143,8 +161,9 @@ async function premarket() {
 
 async function intraday() {
   if (!FORCE && (hm < 900 || hm > 1335)) { console.log('非台股交易時段，略過'); return; }
-  const [twI, etfI, twD, etfD] = await Promise.all([
-    chart('^TWII', '5d', '5m'), chart('00406A.TW', '5d', '5m'), chart('^TWII', '1mo', '1d'), chart('00406A.TW', '6mo', '1d')]);
+  const [twI, etfI, tsmI, fxI, nqI, twD, etfD, nav] = await Promise.all([
+    chart('^TWII', '5d', '5m'), chart('00406A.TW', '5d', '5m'), chart('2330.TW', '5d', '5m'), chart('TWD=X', '5d', '5m'), chart('NQ=F', '5d', '5m'),
+    chart('^TWII', '1mo', '1d'), chart('00406A.TW', '6mo', '1d'), inav('00406A')]);
   // 以最新一個交易日為「當日」；正式執行時必須是今天，FORCE 測試時用最近交易日
   const session = twI.rows.at(-1)?.d;
   if (!FORCE && session !== today) { console.log('今天沒有盤中資料（休市？），略過'); return; }
@@ -154,25 +173,69 @@ async function intraday() {
   const L = levels(before(etfD)), ladder = ladderOf(L);
   const tw = twI.px, twPrev = before(twD).at(-1).c, twChg = (tw / twPrev - 1) * 100;
   const etf = etfI.px, etfChg = (etf / L.prev - 1) * 100;
-  // 15 分鐘變化：當日最新一根 5 分 K 對比 3 根前
-  const tr = twI.rows.filter(r => r.d === session), fast = tr.length > 3 ? (tr.at(-1).c / tr.at(-4).c - 1) * 100 : 0;
+  const day = d => d.rows.filter(r => r.d === session);
+  const chg15 = rows => rows.length > 3 ? (rows.at(-1).c / rows.at(-4).c - 1) * 100 : 0;   // 最新 5 分 K 對比 15 分鐘前
+  const fast = chg15(day(twI));
+  // 「當日低點已經 N 分鐘沒被跌破」：以最後一根 5 分 K 的時間當現在，避免報價延遲造成誤判
+  const lowAge = rows => {
+    if (!rows.length) return 0;
+    const low = Math.min(...rows.map(r => r.l)), at = rows.findLastIndex(r => r.l === low);
+    return (rows.at(-1).t - rows[at].t) / 60;
+  };
+  const etfDay = day(etfI), dayLow = +(etfDay.length ? Math.min(...etfDay.map(r => r.l)) : etf).toFixed(2);
+  const vwap = etfDay.reduce((s, r) => s + (r.h + r.l + r.c) / 3 * r.v, 0) / (etfDay.reduce((s, r) => s + r.v, 0) || 1);
+
+  // B 止跌確認
+  const B = [
+    [lowAge(etfDay) >= cfg.confirmMin, `當日低 ${dayLow} 已 ${lowAge(etfDay).toFixed(0)} 分未破（需 ${cfg.confirmMin}）`],
+    [etf > vwap, `${etf > vwap ? '站上' : '低於'} VWAP ${vwap.toFixed(2)}`],
+  ];
+  const bOk = B.some(b => b[0]);
+  // C 環境過濾（台幣、美期用最近 15 分鐘；台積電、大盤看是否剛創當日新低）
+  // 美期近乎 24 小時交易，用最近 15 分鐘與 60 分鐘的變化
+  const fx15 = chg15(fxI.rows), nq15 = chg15(nqI.rows), nqR = nqI.rows, nq60 = nqR.length > 12 ? (nqR.at(-1).c / nqR.at(-13).c - 1) * 100 : 0;
+  const C = [
+    [nav ? nav.prem <= 0 : null, nav ? `折溢價 ${nav.prem > 0 ? '+' : ''}${nav.prem}%（淨值 ${nav.nav}）` : '折溢價 讀取失敗'],
+    [fx15 < 0.15, `台幣 15 分 ${pct(-fx15)}${fx15 >= 0.15 ? ' 急貶' : ''}`],
+    [nq15 > -0.3 && nq60 > -0.6, `美期 15 分 ${pct(nq15)}、60 分 ${pct(nq60)}`],
+    [lowAge(day(tsmI)) >= cfg.confirmMin, `台積電當日低 ${lowAge(day(tsmI)).toFixed(0)} 分未破`],
+    [lowAge(day(twI)) >= cfg.confirmMin, `大盤當日低 ${lowAge(day(twI)).toFixed(0)} 分未破`],
+  ];
+  const cCount = C.filter(c => c[0] === true).length, cOk = cCount >= cfg.cMin;
+  const mark = arr => arr.map(([ok, t]) => `${ok === true ? '✔' : ok === false ? '✘' : '?'} ${t}`).join('\n');
+  const detail = `B 止跌確認 ${bOk ? '✔' : '✘'}（任一）\n${mark(B)}\nC 環境 ${cCount}/${C.length} ${cOk ? '✔' : '✘'}（需 ${cfg.cMin}）\n${mark(C)}`;
 
   const signals = [];
   const add = (key, priority, title, msg) => signals.push({ key, priority, title, msg });
-  ladder.forEach(({ p, label }, i) => { if (etf <= p) add(`ladder${i}`, 4, `00406A 觸及第 ${i + 1} 批 ${p}${label ? `（${label}）` : ''}`, `現價 ${etf}（${pct(etfChg)}）`); });
+  // 分批：當日曾到價、現價仍在該價位 +1% 以內才算「到價」；B 與 C 都符合才震動提醒
+  ladder.forEach(({ p, label }, i) => {
+    if (dayLow > p || etf > p * 1.01) return;
+    const name = `第 ${i + 1} 批 ${p}${label ? `（${label}）` : ''}`;
+    if (bOk && cOk) add(`met${i}`, 4, `🔴 符合你的${name}規則`, `00406A ${etf}（${pct(etfChg)}）\n${detail}`);
+    else add(`touch${i}`, 2, `🟡 ${name}到價，規則未符合`, `00406A ${etf}（${pct(etfChg)}）\n${detail}`);
+  });
   if (etf < L.bbL) add('bbL', 4, '00406A 跌破布林下軌', `現價 ${etf}，布林下軌 ${L.bbL.toFixed(2)}（轉弱警示）`);
-  if (etf < L.lo20) add('lo20', 3, '00406A 跌破近 20 日低', `現價 ${etf}，近 20 日低 ${L.lo20.toFixed(2)}`);
-  if (etf > L.ma5) add('ma5', 3, '00406A 站上 MA5', `現價 ${etf}，MA5 ${L.ma5.toFixed(2)}（止跌訊號之一）`);
-  if (etfChg <= cfg.etfDownPct) add('etfDown', 4, `00406A 跌幅達 ${pct(etfChg)}`, `現價 ${etf}，昨收 ${L.prev}`);
-  if (twChg <= cfg.twDownPct) add('twDown', 4, `加權大跌 ${pct(twChg)}`, `加權 ${tw.toFixed(0)}，昨收 ${twPrev.toFixed(0)}`);
-  if (twChg >= cfg.twUpPct) add('twUp', 4, `加權大漲 ${pct(twChg)}`, `加權 ${tw.toFixed(0)}，昨收 ${twPrev.toFixed(0)}`);
+  if (etf < L.lo20) add('lo20', 2, '00406A 跌破近 20 日低', `現價 ${etf}，近 20 日低 ${L.lo20.toFixed(2)}`);
+  if (etf > L.ma5) add('ma5', 2, '00406A 站上 MA5', `現價 ${etf}，MA5 ${L.ma5.toFixed(2)}（止跌訊號之一）`);
+  if (etfChg <= cfg.etfDownPct) add('etfDown', 2, `00406A 跌幅達 ${pct(etfChg)}`, `現價 ${etf}，昨收 ${L.prev}`);
+  if (twChg <= cfg.twDownPct) add('twDown', 2, `加權大跌 ${pct(twChg)}`, `加權 ${tw.toFixed(0)}，昨收 ${twPrev.toFixed(0)}`);
+  if (twChg >= cfg.twUpPct) add('twUp', 2, `加權大漲 ${pct(twChg)}`, `加權 ${tw.toFixed(0)}，昨收 ${twPrev.toFixed(0)}`);
   // 急殺 / 急拉以 30 分鐘為單位去重
   const slot = Math.floor(hm / 100) * 2 + (hm % 100 >= 30 ? 1 : 0);
   if (fast <= -cfg.fastPct) add(`fastDown${slot}`, 5, `加權 15 分鐘急殺 ${pct(fast)}`, `加權 ${tw.toFixed(0)}（當日 ${pct(twChg)}）`);
-  if (fast >= cfg.fastPct) add(`fastUp${slot}`, 4, `加權 15 分鐘急拉 ${pct(fast)}`, `加權 ${tw.toFixed(0)}（當日 ${pct(twChg)}）`);
+  if (fast >= cfg.fastPct) add(`fastUp${slot}`, 2, `加權 15 分鐘急拉 ${pct(fast)}`, `加權 ${tw.toFixed(0)}（當日 ${pct(twChg)}）`);
+  // 每小時摘要（10、11、12、13 點各一則，不震動）
+  const hour = Math.floor(hm / 100);
+  if (hm >= 1000 || FORCE) add(`sum${hour}`, 2, `⚪ ${String(hour).padStart(2, '0')}:00 盤中摘要`, [
+    `00406A ${etf}（${pct(etfChg)}）｜當日低 ${dayLow}｜VWAP ${vwap.toFixed(2)}`,
+    `加權 ${tw.toFixed(0)}（${pct(twChg)}）`,
+    `分批：${ladder.map((l, i) => `${dayLow <= l.p ? '●' : '○'}${i + 1} ${l.p}`).join(' ')}`,
+    detail,
+  ].join('\n'));
 
-  console.log(`加權 ${tw.toFixed(0)} (${pct(twChg)}) 15分 ${pct(fast)} | 00406A ${etf} (${pct(etfChg)}) MA5 ${L.ma5.toFixed(2)} 布林下 ${L.bbL.toFixed(2)} 20日低 ${L.lo20.toFixed(2)}`);
+  console.log(`加權 ${tw.toFixed(0)} (${pct(twChg)}) 15分 ${pct(fast)} | 00406A ${etf} (${pct(etfChg)}) 當日低 ${dayLow} VWAP ${vwap.toFixed(2)}`);
   console.log('分批價位：' + fmtLadder(ladder));
+  console.log(detail);
 
   let state = { date: today, sent: [] };
   try { const s = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (s.date === today) state = s; } catch {}
