@@ -2,11 +2,13 @@ name: Intraday alerts
 
 on:
   workflow_dispatch:
-  # 測試用：修改 .github/alert-test.txt 並 push，會以測試模式（忽略交易時段、標題加「[測試]」）跑一次
+  # 測試用：修改 .github/alert-test.txt 並 push，會以測試模式（忽略交易時段、標題加「[測試]」）跑盤前與盤中各一次
   push:
     paths: ['.github/alert-test.txt']
   schedule:
-    # 台北時間平日 09:00–13:55（UTC 01–05 點），每 5 分鐘；腳本會再判斷 13:35 後與休市日略過
+    # 盤前：台北時間平日 08:30（UTC 00:30）
+    - cron: '30 0 * * 1-5'
+    # 盤中：台北時間平日 09:00–13:55（UTC 01–05 點），每 5 分鐘；腳本會再判斷 13:35 後與休市日略過
     - cron: '*/5 1-5 * * 1-5'
 
 permissions:
@@ -16,6 +18,12 @@ concurrency:
   group: alerts
   cancel-in-progress: false
 
+env:
+  NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+  ALERT_CONFIG: ${{ secrets.ALERT_CONFIG }}
+  FORCE: ${{ github.event_name != 'schedule' && '1' || '' }}
+  ALERT_PREFIX: ${{ github.event_name != 'schedule' && '[測試] ' || '' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -24,21 +32,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Premarket briefing
+        if: github.event_name != 'schedule' || github.event.schedule == '30 0 * * 1-5'
+        run: node scripts/alert.mjs
+        env:
+          MODE: premarket
       # 用快取保存當天已推播的訊號，避免重複推
       - uses: actions/cache/restore@v4
+        if: github.event.schedule != '30 0 * * 1-5'
         with:
           path: alert-state.json
           key: alert-state-${{ github.run_id }}
           restore-keys: alert-state-
-      - run: node scripts/alert.mjs
-        env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          ALERT_CONFIG: ${{ secrets.ALERT_CONFIG }}
-          FORCE: ${{ github.event_name != 'schedule' && '1' || '' }}
-          ALERT_PREFIX: ${{ github.event_name != 'schedule' && '[測試] ' || '' }}
+      - name: Intraday signals
+        if: github.event.schedule != '30 0 * * 1-5'
+        run: node scripts/alert.mjs
       # 測試模式不保存去重紀錄，免得影響正式提醒
       - uses: actions/cache/save@v4
-        if: always() && github.event_name == 'schedule'
+        if: always() && github.event.schedule == '*/5 1-5 * * 1-5'
         with:
           path: alert-state.json
           key: alert-state-${{ github.run_id }}
