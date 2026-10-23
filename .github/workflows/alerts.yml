@@ -1,0 +1,38 @@
+name: Intraday alerts
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 台北時間平日 09:00–13:55（UTC 01–05 點），每 5 分鐘；腳本會再判斷 13:35 後與休市日略過
+    - cron: '*/5 1-5 * * 1-5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alerts
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # 用快取保存當天已推播的訊號，避免重複推
+      - uses: actions/cache/restore@v4
+        with:
+          path: alert-state.json
+          key: alert-state-${{ github.run_id }}
+          restore-keys: alert-state-
+      - run: node scripts/alert.mjs
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          ALERT_CONFIG: ${{ secrets.ALERT_CONFIG }}
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: alert-state.json
+          key: alert-state-${{ github.run_id }}
