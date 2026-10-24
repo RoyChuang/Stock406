@@ -76,6 +76,7 @@ section{display:none}section.on{display:block}
   <div class="panel"><h2>買點（你的分批）</h2><div id="ovBuy"></div></div>
   <div class="panel"><h2>止跌跡象</h2><div id="ovStop"></div></div>
   <div class="panel"><h2>支撐與壓力</h2><div id="ovSR"></div></div>
+  <div class="panel"><h2>殖利率位置</h2><div id="ovYld"></div></div>
   <div class="panel"><h2>最新推播</h2><div id="ovSig" class="mute">載入中…</div></div>
 </section>
 
@@ -254,7 +255,8 @@ async function load(sym) {
   if (!res) throw new Error(j.error || j.chart?.error?.description || 'no data');
   const q = res.indicators.quote[0], off = res.meta.gmtoffset || 0;
   const rows = res.timestamp.map((t, i) => ({ t, d: new Date((t + off) * 1000).toISOString().slice(0, 10), o: q.open[i], h: q.high[i], l: q.low[i], c: q.close[i], v: q.volume[i] }))
-    .filter(r => r.c != null && r.o != null);
+    // 台股休市日（例如颱風假）Yahoo 會補一根成交量 0、開高低收都一樣的假 K 棒，會讓布林、均線算歪
+    .filter(r => r.c != null && r.o != null && !(/\.TW$/.test(sym) && r.v === 0 && r.h === r.l));
   return { meta: res.meta, rows, ind: compute(rows) };
 }
 
@@ -423,7 +425,7 @@ async function loadDb() {
     const [pos, lad, tr] = await Promise.all([q('positions'), q('ladder').order('seq'), q('trades').order('traded_on', { ascending: false }).order('id', { ascending: false }).limit(10)]);
     DB = { email: session.user.email, pos: pos.data?.[0], ladder: lad.data || [], trades: tr.data || [] };
   }
-  renderAuth(); renderPosition(); renderOverview(); if (DATA[selected]) renderDetail();
+  renderAuth(); renderPosition(); renderOverview(); if (DATA[selected]) renderDetail(); if (BT) renderYield();
 }
 function renderAuth() {
   if (!sb) { $('auth').innerHTML = '<span class="mute">登入元件載入失敗，部位只存在這個瀏覽器</span>'; return; }
@@ -672,10 +674,29 @@ async function renderOverview() {
   $('ovSig').innerHTML = `<div class="mute">${t(s.ts)} · ${KIND[s.kind] || s.kind}</div><div><b>${s.title}</b></div>${s.verdict ? `<div style="margin-top:4px">${s.verdict}</div>` : ''}`;
 }
 
+// ---------- 殖利率位置（配息資料來自 data/backtest.json） ----------
+function renderYield() {
+  const d = DATA['00406A.TW'], me = BT?.syms?.find(x => x.s === '00406A.TW')?.yld;
+  if (!d || d.error || !me) { $('ovYld').innerHTML = '<span class="mute">配息資料還沒產生</span>'; return; }
+  const p = lastPx(d), y = v => `${fmt(me.annual / v * 100, 1)}%`, md = s => s.slice(5).replace('-', '/');
+  const how = me.full ? '近一年配息加總' : `最近一次配息 ${me.divs.at(-1).a} 元 × ${me.freq}（上市未滿一年）`;
+  const pts = [['現價', p], ...buyLadder(d).map(r => [`第 ${r.n} 批（${r.src}）`, r.p]), ...supRes(d.rows, p).sup.map(g => [`支撐（${g.label.split('、')[0]}）`, g.p])];
+  const ref = BT.syms.filter(x => x.yld?.rank != null).map(x => `<li>${x.name.split('（')[0]}：現在 <b>${x.yld.cur}%</b>，過去（${x.yld.from.slice(0, 4)} 年起）大多在 ${x.yld.p20}%–${x.yld.p80}%、中間值 ${x.yld.p50}%；
+    現在比過去 <b>${x.yld.rank}%</b> 的時間高${x.yld.rank >= 70 ? '（價格相對便宜）' : x.yld.rank <= 30 ? '（價格相對貴）' : '（普通）'}</li>`).join('');
+  $('ovYld').innerHTML = `<div class="big" style="font-size:22px">${y(p)}</div>
+    <div class="mute" style="font-size:12px">年化配息約 ${me.annual} 元（${how}）÷ 現價 ${fmt(p)}</div>
+    <div class="tblwrap" style="margin-top:8px"><table><tr><th>如果在這個價位買</th><th>價格</th><th>殖利率</th></tr>
+      ${pts.map(([k, v]) => `<tr><td style="text-align:left">${k}</td><td>${fmt(v)}</td><td>${y(v)}</td></tr>`).join('')}</table></div>
+    <div class="mute" style="font-size:12px;margin:6px 0">最近配息：${me.divs.map(x => `${md(x.d)} ${x.a}`).join('、')}</div>
+    ${ref ? `<div style="margin-top:8px"><b>類似 ETF 的殖利率位置</b><ul style="margin:4px 0;padding-left:18px">${ref}</ul></div>` : ''}
+    <div class="mute" style="font-size:12px">殖利率＝一年配息 ÷ 買進價，越高代表同樣的配息買得越便宜。00406A 的配息率比一般高股息 ETF 高很多，可能包含本金或資本利得，不保證每個月都配這麼多；配息減少時殖利率會跟著下降。</div>`;
+}
+
 // ---------- 回測（data/backtest.json，GitHub Actions 每次更新資料時重算） ----------
 let BT = null, btSel = null;
 async function renderBacktest() {
   try { BT = await (await fetch(`data/backtest.json?t=${Date.now()}`, { cache: 'no-store' })).json(); } catch { BT = null; }
+  renderYield();
   if (!BT?.syms?.length) { $('bt').innerHTML = '<span class="mute">回測結果還沒產生（每次 GitHub 更新資料時會重算）</span>'; return; }
   // 預設先看 0056：和 00406A 同樣是高股息 ETF、歷史夠長
   if (btSel == null) btSel = Math.max(0, BT.syms.findIndex(x => x.s === '0056.TW'));

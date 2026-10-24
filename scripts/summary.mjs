@@ -13,8 +13,9 @@ const pct = x => (x >= 0 ? '+' : '') + (x * 100).toFixed(2) + '%';
 
 async function load(s) {
   const j = JSON.parse(await readFile(file(s), 'utf8')), r = j.chart.result[0], q = r.indicators.quote[0], off = r.meta.gmtoffset || 0;
-  const rows = r.timestamp.map((t, i) => ({ d: new Date((t + off) * 1000).toISOString().slice(0, 10), h: q.high[i], l: q.low[i], c: q.close[i] }))
-    .filter(x => x.c != null);
+  const rows = r.timestamp.map((t, i) => ({ d: new Date((t + off) * 1000).toISOString().slice(0, 10), h: q.high[i], l: q.low[i], c: q.close[i], v: q.volume?.[i] }))
+    // 台股休市日 Yahoo 會補成交量 0 的假 K 棒
+    .filter(x => x.c != null && !(/\.TW$/.test(s) && x.v === 0 && x.h === x.l));
   return { meta: r.meta, rows, px: r.meta.regularMarketPrice ?? rows.at(-1).c };
 }
 function ind(rows) {

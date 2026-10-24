@@ -44,7 +44,8 @@ async function chart(symbol, range, interval) {
   if (!r.ok) throw new Error(`${symbol} HTTP ${r.status}`);
   const res = (await r.json()).chart.result[0], q = res.indicators.quote[0], off = res.meta.gmtoffset || 0;
   const rows = (res.timestamp || []).map((t, i) => ({ t, d: new Date((t + off) * 1000).toISOString().slice(0, 10), c: q.close[i], h: q.high[i], l: q.low[i], v: q.volume?.[i] || 0 }))
-    .filter(r => r.c != null);
+    // 台股休市日 Yahoo 會補成交量 0 的假 K 棒，會讓布林下緣等分批價位算歪
+    .filter(r => r.c != null && !(/\.TW$/.test(symbol) && r.v === 0 && r.h === r.l));
   return { meta: res.meta, rows, px: res.meta.regularMarketPrice ?? rows.at(-1)?.c };
 }
 const sma = (a, n) => a.slice(-n).reduce((s, v) => s + v, 0) / n;
