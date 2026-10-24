@@ -41,6 +41,16 @@ td:first-child,th:first-child{text-align:left}
 .disc{font-size:12px;color:var(--mute);border-top:1px solid var(--line);padding-top:10px}
 .err{color:var(--up)}
 input:disabled{opacity:.6}
+.tabs{display:flex;gap:4px;width:100%;overflow-x:auto;scrollbar-width:none;margin-bottom:-14px}
+.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--mute);padding:8px 12px;white-space:nowrap}
+.tabs button.on{color:var(--fg);border-bottom-color:var(--acc)}
+section{display:none}section.on{display:block}
+.hero{display:grid;grid-template-columns:1fr 2fr;gap:16px}
+@media(max-width:700px){.hero{grid-template-columns:1fr}}
+.big{font-size:30px;font-weight:700;line-height:1.3}
+.buy{display:grid;grid-template-columns:auto 1fr auto;gap:6px 12px;align-items:center}
+.buy .gap{font-size:12px}
+@media(max-width:520px){.grid{grid-template-columns:1fr 1fr}.card .px{font-size:20px}}
 </style>
 </head>
 <body>
@@ -48,8 +58,26 @@ input:disabled{opacity:.6}
   <h1>Stock406 盤勢儀表板</h1>
   <div><span id="status" class="mute">載入中…</span> <button id="refresh">重新整理</button>
   <label class="mute"><input type="checkbox" id="auto" checked> 每 60 秒更新</label></div>
+  <nav class="tabs" id="tabs">
+    <button data-t="home">總覽</button><button data-t="market">行情</button><button data-t="pos">我的部位</button><button data-t="sig">推播紀錄</button><button data-t="learn">觀察與策略</button>
+  </nav>
 </header>
 <main>
+<section data-tab="home">
+  <div class="hero">
+    <div class="panel">
+      <div class="mute">00406A 主動中信台灣收益</div>
+      <div id="ovPx" class="big">—</div>
+      <div id="ovChg"></div>
+      <div id="ovTime" class="mute" style="font-size:12px"></div>
+    </div>
+    <div class="panel" id="ovRisk"><div class="mute">風險等級</div><div class="big">—</div></div>
+  </div>
+  <div class="panel"><h2>買點</h2><div id="ovBuy"></div></div>
+  <div class="panel"><h2>最新推播</h2><div id="ovSig" class="mute">載入中…</div></div>
+</section>
+
+<section data-tab="market">
   <div class="grid" id="cards"></div>
 
   <div class="two">
@@ -67,6 +95,9 @@ input:disabled{opacity:.6}
       <div class="panel"><h2>重要價位（由近期價格自動算出）</h2><div class="tblwrap"><table id="lvlTbl"></table></div></div>
     </div>
   </div>
+</section>
+
+<section data-tab="pos">
 
   <div class="panel">
     <h2>我的 00406A 部位</h2>
@@ -90,12 +121,18 @@ input:disabled{opacity:.6}
       </div>
     </div>
   </div>
+</section>
+
+<section data-tab="sig">
 
   <div class="panel">
     <h2>推播紀錄（00406A）</h2>
     <div class="tblwrap"><table id="sigTbl"></table></div>
     <div class="legend">每次推播的價格、風險等級和依規則的結論。「1 天後 / 5 天後」是之後第 1、5 個交易日收盤相對推播價格的漲跌，每晚自動回補，用來檢討規則準不準。這裡沒有任何張數或金額。</div>
   </div>
+</section>
+
+<section data-tab="learn">
 
   <div class="panel">
     <h2>觀察重點（00406A）</h2>
@@ -113,6 +150,7 @@ input:disabled{opacity:.6}
       <div><h3>⑥ 避開除息前追價</h3>除息當天股價會扣掉配息，只為了卡位領息而追價，本質上只是把錢換個口袋，還可能增加稅負和二代健保補充保費。</div>
     </div>
   </div>
+</section>
 
   <p class="disc">本頁內容僅為公開市場數據與技術指標的自動計算結果，以及一般性的投資知識，不構成任何個人化的投資建議。資料來源為 Yahoo Finance，可能有延遲或錯誤。所有買賣決定請自行判斷，並自負風險。</p>
 </main>
@@ -215,7 +253,7 @@ async function refreshAll() {
   $('status').textContent = '更新中…';
   const out = await Promise.allSettled(SYMBOLS.map(x => load(x.s)));
   out.forEach((o, i) => { if (o.status === 'fulfilled') DATA[SYMBOLS[i].s] = o.value; else DATA[SYMBOLS[i].s] = { error: String(o.reason) }; });
-  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals();
+  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview();
   let src = '即時';
   if (!LIVE) {
     try { const u = await (await fetch(`data/updated.json?t=${Date.now()}`, { cache: 'no-store' })).json(); src = '資料抓取於 ' + new Date(u.t).toLocaleString('zh-TW'); } catch {}
@@ -375,7 +413,7 @@ async function loadDb() {
     const [pos, lad, tr] = await Promise.all([q('positions'), q('ladder').order('seq'), q('trades').order('traded_on', { ascending: false }).order('id', { ascending: false }).limit(10)]);
     DB = { email: session.user.email, pos: pos.data?.[0], ladder: lad.data || [], trades: tr.data || [] };
   }
-  renderAuth(); renderPosition();
+  renderAuth(); renderPosition(); renderOverview();
 }
 function renderAuth() {
   if (!sb) { $('auth').innerHTML = '<span class="mute">登入元件載入失敗，部位只存在這個瀏覽器</span>'; return; }
@@ -406,11 +444,11 @@ function getPos() {
 function savePos(p) { try { localStorage.setItem('pos406', JSON.stringify(p)); } catch {} }
 // 資料庫的分批價位（prev、bbL、lo20、lo60、pctN 或固定價）換算成價格；用今天以前的日 K，和推播的算法一致
 const LVL = { prev: '上次收盤價', bbL: '布林下緣', lo20: '近 1 個月最低', lo60: '近 3 個月最低' };
-function dbLadder(d) {
+function dbLadder(d, rows = DB.ladder) {
   const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10), x = d.ind;
   const N = d.rows.at(-1).d === today ? x.c.length - 2 : x.c.length - 1;
   const v = { prev: x.c[N], bbL: x.bbL[N], lo20: Math.min(...x.l.slice(N - 19, N + 1)), lo60: Math.min(...x.l.slice(N - 59, N + 1)) };
-  return DB.ladder.map(r => {
+  return rows.map(r => {
     const m = /^pct(-?\d+(?:\.\d+)?)$/.exec(r.level);
     const p = !isNaN(+r.level) ? +r.level : m ? v.prev * (1 + m[1] / 100) : v[r.level];
     return { id: r.id, n: r.seq, src: LVL[r.level] || (m ? `上次收盤 ${m[1]}%` : '固定價'), p: +(+p).toFixed(2), q: r.lots, filled: r.status !== 'active' };
@@ -539,6 +577,47 @@ function renderWatch() {
   items.push('<li><b>事件</b><ul><li>00406A 下次除息預估 11/3，最後買進日 11/2（週一），金額以投信公告為準</li><li>美股科技巨頭財報週、FOMC 利率決策（日期請查證）</li></ul></li>');
   $('watch').innerHTML = `<ul style="margin:0;padding-left:18px">${items.join('')}</ul>`;
 }
+
+// ---------- 總覽 ----------
+async function renderOverview() {
+  const d = DATA['00406A.TW'];
+  if (d && !d.error) {
+    const N = d.rows.length - 1, p = lastPx(d), ch = p - d.rows[N - 1].c;
+    $('ovPx').innerHTML = `<span class="${cls(ch)}">${fmt(p)}</span>`;
+    $('ovChg').innerHTML = `<span class="${cls(ch)}">${sgn(ch)}（${sgn(ch / d.rows[N - 1].c * 100)}%）</span>`;
+    $('ovTime').textContent = marketTime(d.meta);
+    const lad = dbLadder(d, DB ? DB.ladder : [[1, 'prev'], [2, 'bbL'], [3, 'lo60']].map(([seq, level]) => ({ seq, level, status: 'active' }))).filter(r => !r.filled);
+    $('ovBuy').innerHTML = lad.length ? `<div class="buy">${lad.map((r, i) => {
+      const gap = (r.p / p - 1) * 100, hit = r.p >= p;
+      return `<span>${hit ? '🎯' : '⚪'} 第 ${r.n ?? i + 1} 批</span><span><b>${fmt(r.p)}</b> <span class="mute">${r.src}</span></span>
+        <span class="gap ${hit ? 'up' : 'mute'}">${hit ? '已到價' : `還差 ${fmt(Math.abs(gap), 1)}%`}</span>`;
+    }).join('')}</div><div class="mute" style="font-size:12px;margin-top:8px">🎯 已到價 ⚪ 還沒到。到價不等於可以買，盤中還要符合你的規則（推播會告訴你）。${DB ? '' : '未登入時顯示推播預設的三個價位，登入後顯示你自己的設定。'}</div>` : '<span class="mute">分批都買完了</span>';
+  }
+  if (!sb) return;
+  const { data, error } = await sb.from('signals').select('ts,kind,title,risk_level,risk_score,reasons,verdict').eq('symbol', '00406A').order('ts', { ascending: false }).limit(20);
+  if (error || !data.length) {
+    $('ovRisk').innerHTML = '<div class="mute">風險等級</div><div class="big">—</div><div class="mute">推播紀錄有資料後顯示</div>';
+    $('ovSig').textContent = '還沒有推播紀錄';
+    return;
+  }
+  const r = data.find(s => s.risk_level), s = data[0], t = x => new Date(x).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  $('ovRisk').innerHTML = r ? `<div class="mute">風險等級（${t(r.ts)} ${KIND[r.kind] || r.kind}）</div><div class="big">${r.risk_level}</div>
+    <div>${(r.reasons || []).map(x => `<div>・${x}</div>`).join('') || '<span class="mute">沒有明顯風險因素</span>'}</div>` : '<div class="mute">風險等級</div><div class="big">—</div>';
+  $('ovSig').innerHTML = `<div class="mute">${t(s.ts)} · ${KIND[s.kind] || s.kind}</div><div><b>${s.title}</b></div>${s.verdict ? `<div style="margin-top:4px">${s.verdict}</div>` : ''}`;
+}
+
+// ---------- 分頁 ----------
+const TABS = ['home', 'market', 'pos', 'sig', 'learn'];
+function showTab(t) {
+  if (!TABS.includes(t)) t = 'home';
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  document.querySelectorAll('section[data-tab]').forEach(s => s.classList.toggle('on', s.dataset.tab === t));
+  if (location.hash !== '#' + t) history.replaceState(null, '', '#' + t);
+  if (t === 'market' && DATA[selected]) renderDetail();
+}
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => showTab(b.dataset.t));
+window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+showTab(location.hash.slice(1));
 
 $('refresh').onclick = refreshAll;
 setInterval(() => { if ($('auto').checked) refreshAll(); }, 60000);
