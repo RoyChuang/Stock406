@@ -151,9 +151,12 @@ else if (MODE === 'evening') await evening();
 else await intraday();
 
 async function premarket() {
-  if (!FORCE && await isHoliday()) { console.log('今天休市，略過'); return; }
-  const [tw, etf, t2330, adr, ewt, fx, vix, sox] = await Promise.all(
-    ['^TWII', '00406A.TW', '2330.TW', 'TSM', 'EWT', 'TWD=X', '^VIX', '^SOX'].map(s => chart(s, '1y', '1d')));
+  // 台股休市（週六、國定假日）時，只要昨晚美股有開，一樣推「美股收盤總結」，推估台股下次開盤
+  const twClosed = [0, 6].includes(tpe.getUTCDay()) || await isHoliday();
+  const [tw, etf, t2330, adr, ewt, fx, vix, sox, gspc, ixic] = await Promise.all(
+    ['^TWII', '00406A.TW', '2330.TW', 'TSM', 'EWT', 'TWD=X', '^VIX', '^SOX', '^GSPC', '^IXIC'].map(s => chart(s, '1y', '1d')));
+  const yesterday = new Date(tpe - 864e5).toISOString().slice(0, 10), usDate = gspc.rows.at(-1).d;
+  if (!FORCE && twClosed && usDate !== yesterday) { console.log('台股休市，昨晚美股也沒開，略過'); return; }
   const nav = await inav('00406A');
   // 台股最後一個收盤日 dT；盤前只看 dT 以前（含）的日 K
   const twRows = tw.rows.filter(r => r.d < today), dT = twRows.at(-1).d;
@@ -175,12 +178,17 @@ async function premarket() {
   ].filter(w => w[0]);
 
   const md = dT.slice(5).replace('-', '/');
-  const title = `盤前：預估大盤 ${pct(gap * 100)}，00406A 約 ${estEtf}`;
+  const usChg = d => pct((d.px / d.rows.at(-2).c - 1) * 100);
+  const title = twClosed ? `美股收盤總結（台股今天休市）：預估台股下次開盤 ${pct(gap * 100)}，00406A 約 ${estEtf}`
+    : `盤前：預估大盤 ${pct(gap * 100)}，00406A 約 ${estEtf}`;
   const msg = [
-    `用美股推估台股開盤：`,
+    `美股收盤（${usDate.slice(5).replace('-', '/')}）：S&P 500 ${usChg(gspc)}｜Nasdaq ${usChg(ixic)}｜美國半導體 ${usChg(sox)}`,
+    `台積電美股 ${usChg(adr)}｜美股的台股 ETF ${usChg(ewt)}`,
+    ``,
+    `用美股推估台股${twClosed ? '下次' : ''}開盤（從上次台股收盤到現在的美股變化）：`,
     `大盤（加權指數）約 ${estTw.toFixed(0)}（${pct(gap * 100)}）`,
     `台積電約 ${pct(adrGap * 100)}`,
-    `00406A 上次收盤 ${L.prev}（${md}）→ 預估開盤約 ${estEtf}`,
+    `00406A 上次收盤 ${L.prev}（${md}）→ 預估${twClosed ? '下次' : ''}開盤約 ${estEtf}`,
     nav ? `上次收盤時，市價比基金實際價值（淨值 ${nav.nav}）${premTxt(nav.prem)}` : '市價與淨值比較：讀取失敗',
     ``,
     `你的分批價位（🎯 預估開盤會跌到、⚪ 不會）：`, ...hits,
@@ -192,10 +200,10 @@ async function premarket() {
     strategyLine(L, L.prev, L.vLast / L.v5, `（${md}）`),
     ``,
     `美股恐慌指數 VIX ${vixNow.toFixed(1)}（<18 平靜、>25 恐慌）`,
-    `美國半導體 ${pct((sox.px / sox.rows.at(-2).c - 1) * 100)}｜1 美元 = ${fx.px.toFixed(3)} 台幣`,
+    `1 美元 = ${fx.px.toFixed(3)} 台幣`,
     `以上是用美股推算的粗估，僅供參考。${clock}`,
   ].join('\n');
-  await push(title, msg, 3, ['sunrise']);
+  await push(title, msg, twClosed ? 2 : 3, ['sunrise']);
 }
 
 // 證交所三大法人買賣超（約 15:00–16:00 公布）：大盤金額（億元）與 00406A 張數

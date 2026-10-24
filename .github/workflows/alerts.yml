@@ -6,8 +6,8 @@ on:
   push:
     paths: ['.github/alert-test.txt']
   schedule:
-    # 盤前：台北時間平日 08:30（UTC 00:30）
-    - cron: '30 0 * * 1-5'
+    # 盤前：台北時間週一到週六 08:30（UTC 00:30）；台股休市但昨晚美股有開時改推「美股收盤總結」
+    - cron: '30 0 * * 1-6'
     # 盤中：台北時間平日 09:00–13:55（UTC 01–05 點），每 5 分鐘；腳本會再判斷 13:35 後與休市日略過
     - cron: '*/5 1-5 * * 1-5'
     # 晚間覆盤：今天台股總結 + 美股開盤後走勢。美國夏令時間台北 22:00（UTC 14:00）、冬令 22:45（UTC 14:45），腳本會自動選一個
@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: 22
       - name: Premarket briefing
-        if: github.event_name != 'schedule' || github.event.schedule == '30 0 * * 1-5'
+        if: github.event_name != 'schedule' || github.event.schedule == '30 0 * * 1-6'
         run: node scripts/alert.mjs
         env:
           MODE: premarket

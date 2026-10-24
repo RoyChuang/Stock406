@@ -10,7 +10,7 @@
 | `server.js` | 本機伺服器，port 4060，`/api/chart` 代理 Yahoo chart API | 本機 |
 | `scripts/fetch-data.mjs` | 抓 Yahoo 日線存成 `data/*.json`（`^` 換成 `_`） | Actions |
 | `scripts/summary.mjs` | 把 data 濃縮成約 3 KB 文字摘要，給雲端 Claude 讀（不要讓 Claude 直接讀原始 JSON，約 325 KB） | 雲端排程 |
-| `scripts/alert.mjs` | ntfy 推播：`MODE=premarket` 盤前推估、`MODE=intraday` 盤中規則判斷、`MODE=evening` 晚間覆盤（美國夏令 22:00、冬令 22:45，依 `EVENING_SLOT` 自動擇一）（台股收盤、三大法人 BFI82U/T86、分批有沒有跌到、美股開盤後走勢與明天推估） | Actions |
+| `scripts/alert.mjs` | ntfy 推播：`MODE=premarket` 盤前推估（週一到週六；台股休市但昨晚美股有開時改推「美股收盤總結」）、`MODE=intraday` 盤中規則判斷、`MODE=evening` 晚間覆盤（美國夏令 22:00、冬令 22:45，依 `EVENING_SLOT` 自動擇一）（台股收盤、三大法人 BFI82U/T86、分批有沒有跌到、美股開盤後走勢與明天推估） | Actions |
 | `.github/workflows/pages.yml` | 平日每 15 分鐘抓資料 → 部署 Pages，並把資料強制推到單一 commit 的 `data` 分支 | Actions |
 | `.github/workflows/alerts.yml` | 08:30 盤前、09:00–13:55 每 5 分鐘盤中提醒、22:00 或 22:45 晚間覆盤；修改 `.github/alert-test.txt` 並 push 會觸發測試模式 | Actions |
 
