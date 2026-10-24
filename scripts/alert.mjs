@@ -1,5 +1,5 @@
 // 台股訊號推播（ntfy），由 GitHub Actions 執行：
-//   MODE=intraday（預設）盤中每 5 分鐘：依使用者的分批規則（B 止跌確認 + C 環境過濾）判斷，只有符合時才推（會震動）
+//   MODE=intraday（預設）盤中每 5 分鐘：依使用者的分批規則（B 止跌確認 + C 環境過濾）判斷，符合時短震一下；到價未符合、跌破布林下緣、急跌、每小時摘要不震動
 //   MODE=premarket        08:30（週一到週六）：用美股推估開盤，推風險等級與買點卡片（不震動）
 //   MODE=evening          22:00 / 22:45：今天收盤、法人、明天推估，推風險等級與買點卡片（不震動）
 // 環境變數：
@@ -280,16 +280,32 @@ async function intraday() {
   console.log(`加權 ${tw.toFixed(0)} (${pct(twChg)}) 15分 ${pct(fast)} | 00406A ${etf} (${pct(etfChg)}) 當日低 ${dayLow} VWAP ${vwap.toFixed(2)}`);
   console.log('分批價位：' + fmtLadder(ladder));
   console.log(detail);
-  // 使用者要求盤中只在「符合規則」時推（震動）；到價未符合、跌破、急跌等「還在跌」的提醒都不推
-  // 同時符合多批時合併成一則；每批一天只推一次
+  // 只有「符合規則」會震動（priority 3，短震一下）；其餘「還在跌」的提醒都用 priority 2，不震動
+  // 每個訊號每天只推一次；同時符合多批合併成一則
   let state = { date: today, sent: [] };
   try { const st = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (st.date === today) state = st; } catch {}
-  const fresh = bOk && cOk ? touched.filter(n => !state.sent.includes(`met${n - 1}`)) : [];
-  if (fresh.length) {
-    const names = fresh.map(n => `${ladder[n - 1].p}（${ladder[n - 1].label}）`).join('、');
-    const title = `✅ 符合你的第 ${fresh.join('、')} 批規則：${names}`;
-    if (await push(title, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}\n${detail}\n${clock}`, 3, ['white_check_mark']))
-      state.sent.push(...fresh.map(n => `met${n - 1}`));
-  } else console.log('沒有新訊號');
+  const signals = [];
+  const add = (keys, priority, title, msg) => { keys = [].concat(keys).filter(k => !state.sent.includes(k)); if (keys.length) signals.push({ keys, priority, title, msg }); };
+  const head = `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}`;
+  const metNew = bOk && cOk ? touched.filter(n => !state.sent.includes(`met${n - 1}`)) : [];
+  if (metNew.length) add(metNew.map(n => `met${n - 1}`), 3, `✅ 符合你的第 ${metNew.join('、')} 批規則：${metNew.map(n => `${ladder[n - 1].p}（${ladder[n - 1].label}）`).join('、')}`, `${head}\n${detail}`);
+  const touchNew = bOk && cOk ? [] : touched;
+  if (touchNew.length) add(touchNew.map(n => `touch${n - 1}`), 2, `🟡 第 ${touchNew.join('、')} 批到價，但規則還沒符合`, `${head}\n${detail}`);
+  if (etf < L.bbL) add('bbL', 2, '00406A 跌破布林下緣', `現價 ${etf}，布林下緣 ${L.bbL.toFixed(2)}（近期正常波動的底部，跌破代表跌勢比平常強）`);
+  // 急跌以 30 分鐘為單位去重
+  const slot = Math.floor(hm / 100) * 2 + (hm % 100 >= 30 ? 1 : 0);
+  if (fast <= -0.7) add(`fastDown${slot}`, 2, `大盤 15 分鐘內急跌 ${pct(fast)}`, `加權指數 ${tw.toFixed(0)}（今天 ${pct(twChg)}）`);
+  // 每小時摘要（10、11、12、13 點各一則）：3 行，現價、風險、結論
+  const hour = Math.floor(hm / 100);
+  if ((hm >= 1000 || FORCE) && !state.sent.includes(`sum${hour}`)) {
+    const r = risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav });
+    add(`sum${hour}`, 2, `⚪ ${String(hour).padStart(2, '0')}:00 00406A ${etf}（${pct(etfChg)}）｜風險 ${r.level}`, [
+      `今天最低 ${dayLow}｜${ladder.map((l, i) => `${dayLow <= l.p ? '🎯' : '⚪'}${i + 1} ${l.p}`).join(' ')}`,
+      `風險：${r.reasons.join('、') || '沒有明顯風險訊號'}`,
+      verdict,
+    ].join('\n'));
+  }
+  for (const s of signals) if (await push(s.title, `${s.msg}\n${clock}`, s.priority, [s.priority >= 3 ? 'white_check_mark' : 'chart_with_downwards_trend'])) state.sent.push(...s.keys);
+  if (!signals.length) console.log('沒有新訊號');
   await writeFile(STATE_FILE, JSON.stringify(state));
 }
