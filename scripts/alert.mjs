@@ -288,7 +288,7 @@ async function intraday() {
   if (fresh.length) {
     const names = fresh.map(n => `${ladder[n - 1].p}（${ladder[n - 1].label}）`).join('、');
     const title = `✅ 符合你的第 ${fresh.join('、')} 批規則：${names}`;
-    if (await push(title, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}\n${detail}\n${clock}`, 4, ['white_check_mark']))
+    if (await push(title, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}\n${detail}\n${clock}`, 3, ['white_check_mark']))
       state.sent.push(...fresh.map(n => `met${n - 1}`));
   } else console.log('沒有新訊號');
   await writeFile(STATE_FILE, JSON.stringify(state));
