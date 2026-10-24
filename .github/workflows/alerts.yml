@@ -24,6 +24,8 @@ concurrency:
 env:
   NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
   ALERT_CONFIG: ${{ secrets.ALERT_CONFIG }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
   FORCE: ${{ github.event_name != 'schedule' && '1' || '' }}
   ALERT_PREFIX: ${{ github.event_name != 'schedule' && '[測試] ' || '' }}
 

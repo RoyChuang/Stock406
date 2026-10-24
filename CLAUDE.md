@@ -27,6 +27,13 @@
 - 推播分級：所有推播都用 priority 3（短震一下）。priority 4 以上震動太長，使用者不要。
 - 盤中每個訊號每天只推一次（Actions cache 保存 `alert-state.json`）；測試模式不保存。
 
+## Supabase（第一階段）
+
+- `supabase/schema.sql` 建表（trades、budgets、ladder、rules、positions 檢視），全部開 RLS，匿名讀不到。
+- `scripts/supabase.mjs` 共用連線；`scripts/db.mjs` 在本機記成交、改分批、標記已買（金鑰在 `journal/.env`，不進 git）。
+- `alert.mjs` 有 `SUPABASE_URL` / `SUPABASE_SECRET_KEY` 時，從 `ladder`（status=active）與 `rules` 讀分批和規則，讀不到才用 `ALERT_CONFIG`。批次編號用資料庫的 seq，買完一批不會讓後面的編號往前移。
+- 使用者回報成交：`node scripts/db.mjs trade buy 日期 價格 張數`，再 `fill 批次`；同時更新 journal。
+
 ## 修改後如何驗證
 
 - 本機：`FORCE=1 STATE_FILE=/tmp/a.json node scripts/alert.mjs`（不設 `NTFY_TOPIC` 只印不推）、`MODE=premarket FORCE=1 node scripts/alert.mjs`。

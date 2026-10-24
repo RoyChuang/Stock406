@@ -8,6 +8,7 @@
 //   STATE_FILE    盤中已推播紀錄，避免同一訊號一天重複推（預設 alert-state.json）
 //   FORCE=1       忽略交易時段與休市檢查（測試用）；ALERT_PREFIX 會加在標題前
 import { readFile, writeFile } from 'node:fs/promises';
+import { dbReady, rest } from './supabase.mjs';
 
 const DEFAULTS = {
   // 00406A 分批價位。每一項可以是固定價格，或每次用最新日 K 計算的動態價位：
@@ -21,6 +22,15 @@ const DEFAULTS = {
   cMin: 3,
 };
 const cfg = { ...DEFAULTS, ...JSON.parse(process.env.ALERT_CONFIG || '{}') };
+// 有設定 Supabase 時，分批與規則改從資料庫讀（買完的批次標成 filled 就自動不看）；讀不到才用 ALERT_CONFIG
+if (dbReady) {
+  try {
+    const [lad, rul] = await Promise.all([rest('ladder?symbol=eq.00406A&order=seq'), rest('rules?symbol=eq.00406A')]);
+    if (lad.length) cfg.ladder = lad.filter(r => r.status === 'active').map(r => ({ n: r.seq, level: r.level }));
+    if (rul[0]) Object.assign(cfg, { confirmMin: rul[0].confirm_min, cMin: rul[0].c_min });
+    console.log('分批與規則來自 Supabase');
+  } catch (e) { console.log('Supabase 讀取失敗，改用 ALERT_CONFIG：', e.message); }
+}
 const MODE = process.env.MODE || 'intraday', FORCE = !!process.env.FORCE;
 const TOPIC = process.env.NTFY_TOPIC;
 const STATE_FILE = process.env.STATE_FILE || 'alert-state.json';
@@ -61,16 +71,18 @@ function levels(rows) {
 function ladderOf(L) {
   const DYN = { prev: [L.prev, '上次收盤價'], bbL: [L.bbL, '布林下緣'], lo20: [L.lo20, '近 1 個月最低'], lo60: [L.lo60, '近 3 個月最低'] };
   const out = [];
-  for (const x of cfg.ladder) {
+  // 每項可以是 { n: 第幾批, level } （Supabase）或單純的價位值（ALERT_CONFIG，依順序編號）
+  for (const [i, item] of cfg.ladder.entries()) {
+    const { n, level: x } = item && typeof item === 'object' ? item : { n: i + 1, level: item };
     let lv;
-    if (typeof x === 'number') lv = { p: x, label: '' };
+    if (!isNaN(+x)) lv = { p: +x, label: '固定價' };
     else if (DYN[x]) lv = { p: +DYN[x][0].toFixed(2), label: DYN[x][1] };
     else {
       const m = /^pct(-?\d+(?:\.\d+)?)$/.exec(x);
       if (!m) throw new Error(`ALERT_CONFIG ladder 看不懂：${x}`);
       lv = { p: +(L.prev * (1 + m[1] / 100)).toFixed(2), label: `上次收盤 ${m[1]}%` };
     }
-    if (!out.some(o => Math.abs(o.p - lv.p) / o.p < 0.005)) out.push(lv);
+    if (!out.some(o => Math.abs(o.p - lv.p) / o.p < 0.005)) out.push({ ...lv, n });
   }
   return out;
 }
@@ -111,11 +123,11 @@ function risk({ L, price, tw, w, nav, pre = '' }) {
 }
 const riskLines = r => [`風險：${r.level}`, ...(r.reasons.length ? r.reasons.map(t => `　└ ${t}`) : ['　└ 目前沒有明顯風險訊號'])];
 // 買點：est 是預估價或今天最低價；🎯 會到、⚪ 還差幾 %
-const buyLines = (ladder, est, hitTxt) => ['買點：', ...ladder.map((l, i) => est != null && est <= l.p
-  ? `🎯 第${i + 1}批 ${l.p}（${l.label}）　${hitTxt}`
-  : `⚪ 第${i + 1}批 ${l.p}（${l.label}）${est != null ? `　還差 ${pct((l.p / est - 1) * 100)}` : ''}`)];
+const buyLines = (ladder, est, hitTxt) => ['買點：', ...ladder.map(l => est != null && est <= l.p
+  ? `🎯 第${l.n}批 ${l.p}（${l.label}）　${hitTxt}`
+  : `⚪ 第${l.n}批 ${l.p}（${l.label}）${est != null ? `　還差 ${pct((l.p / est - 1) * 100)}` : ''}`)];
 const premTxt = p => p > 0 ? `貴 ${p}%` : p < 0 ? `便宜 ${-p}%` : '一樣';
-const fmtLadder = ladder => ladder.map((l, i) => `第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、');
+const fmtLadder = ladder => ladder.map(l => `第${l.n}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、');
 
 // 證交所 MIS 的 ETF 盤中預估淨值（約 15 秒更新）：e 市價、f 預估淨值、g 折溢價 %、j 時間
 async function inav(code) {
@@ -207,7 +219,7 @@ async function evening() {
   const [nav, inst] = await Promise.all([inav('00406A'), institutions(dT)]);
   const sg = x => (x >= 0 ? '+' : '') + Math.round(x).toLocaleString('en-US');
   // 今天跌到哪幾批（用今天以前的價位）；明天的買點用含今天的價位
-  const hitToday = ladderOf(Lb).map((l, i) => bar.l <= l.p ? i + 1 : 0).filter(Boolean);
+  const hitToday = ladderOf(Lb).map(l => bar.l <= l.p ? l.n : 0).filter(Boolean);
   const gap = ewt.rows.at(-1).d >= dT ? ewtGap(twRows, ewt, fx, dT) : null, est = gap == null ? null : +(bar.c * (1 + gap)).toFixed(2);
   const navOk = nav && nav.date === dT.replace(/-/g, '');
   const r = risk({ L, price: bar.c, tw: { px: twRows.at(-1).c, L: levels(twRows) }, w, nav: navOk && nav });
@@ -272,7 +284,7 @@ async function intraday() {
   const mark = arr => arr.map(([ok, t]) => `　└ ${ok === true ? '✅' : ok === false ? '❌' : '❔'} ${t}`).join('\n');
   // 依使用者規則的一行結論（不是我的買賣建議）：到價且 B、C 都符合才是「可以照計畫買」
   const missAll = [...(bOk ? [] : ['00406A 還在跌']), ...C.filter(c => c[0] !== true).map(c => c[2])];
-  const touched = ladder.map((l, i) => dayLow <= l.p && etf <= l.p * 1.01 ? i + 1 : 0).filter(Boolean);
+  const touched = ladder.map(l => dayLow <= l.p && etf <= l.p * 1.01 ? l.n : 0).filter(Boolean);
   const verdict = bOk && cOk ? (touched.length ? `✅ 結論：符合你的規則，第 ${touched.join('、')} 批可以照計畫買` : '⏸ 結論：規則符合，但還沒到你的價位')
     : `⏸ 結論：依你的規則現在先不買（原因：${missAll.join('、')}）`;
   const detail = `${bOk ? '✅' : '❌'} B 跌勢暫停（下面任一項就算）\n${mark(B)}\n${cOk ? '✅' : '❌'} C 大環境 ${cCount}/${C.length} 項 OK（要 ${cfg.cMin} 項）\n${mark(C)}`;
@@ -287,10 +299,10 @@ async function intraday() {
   const signals = [];
   const add = (keys, priority, title, msg) => { keys = [].concat(keys).filter(k => !state.sent.includes(k)); if (keys.length) signals.push({ keys, priority, title, msg }); };
   const head = `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}`;
-  const metNew = bOk && cOk ? touched.filter(n => !state.sent.includes(`met${n - 1}`)) : [];
-  if (metNew.length) add(metNew.map(n => `met${n - 1}`), 3, `✅ 符合你的第 ${metNew.join('、')} 批規則：${metNew.map(n => `${ladder[n - 1].p}（${ladder[n - 1].label}）`).join('、')}`, `${head}\n${detail}`);
+  const metNew = bOk && cOk ? touched.filter(n => !state.sent.includes(`met${n}`)) : [];
+  if (metNew.length) add(metNew.map(n => `met${n}`), 3, `✅ 符合你的第 ${metNew.join('、')} 批規則：${metNew.map(n => { const l = ladder.find(x => x.n === n); return `${l.p}（${l.label}）`; }).join('、')}`, `${head}\n${detail}`);
   const touchNew = bOk && cOk ? [] : touched;
-  if (touchNew.length) add(touchNew.map(n => `touch${n - 1}`), 3, `🟡 第 ${touchNew.join('、')} 批到價，但規則還沒符合`, `${head}\n${detail}`);
+  if (touchNew.length) add(touchNew.map(n => `touch${n}`), 3, `🟡 第 ${touchNew.join('、')} 批到價，但規則還沒符合`, `${head}\n${detail}`);
   if (etf < L.bbL) add('bbL', 3, '00406A 跌破布林下緣', `現價 ${etf}，布林下緣 ${L.bbL.toFixed(2)}（近期正常波動的底部，跌破代表跌勢比平常強）`);
   // 急跌以 30 分鐘為單位去重
   const slot = Math.floor(hm / 100) * 2 + (hm % 100 >= 30 ? 1 : 0);
@@ -300,7 +312,7 @@ async function intraday() {
   if ((hm >= 1000 || FORCE) && !state.sent.includes(`sum${hour}`)) {
     const r = risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav });
     add(`sum${hour}`, 3, `⚪ ${String(hour).padStart(2, '0')}:00 00406A ${etf}（${pct(etfChg)}）｜風險 ${r.level}`, [
-      `今天最低 ${dayLow}｜${ladder.map((l, i) => `${dayLow <= l.p ? '🎯' : '⚪'}${i + 1} ${l.p}`).join(' ')}`,
+      `今天最低 ${dayLow}｜${ladder.map(l => `${dayLow <= l.p ? '🎯' : '⚪'}${l.n} ${l.p}`).join(' ')}`,
       `風險：${r.reasons.join('、') || '沒有明顯風險訊號'}`,
       verdict,
     ].join('\n'));
