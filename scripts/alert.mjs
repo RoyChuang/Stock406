@@ -167,6 +167,12 @@ const supLine = (rows, p) => {
   const { sup } = supRes(rows, p);
   return sup.length ? [`支撐：${sup.slice(0, 2).map(g => `${g.p.toFixed(2)}（${g.ks.slice(0, 2).join('＋')}）`).join('、')}`] : [];
 };
+// 止跌跡象：和儀表板總覽同三項；L 是 levels() 的結果（最後一根是最近收盤）
+const stopSigns = L => [[L.K > L.D && L.K < 30, 'KD 低檔翻頭'], [L.hist < 0 && Math.abs(L.hist) < Math.abs(L.histPrev), '下跌力道變小'], [L.prev > L.ma5, '站回 5 日平均']];
+const stopLine = L => {
+  const ok = stopSigns(L).filter(([v]) => v).map(([, t]) => t);
+  return [`止跌跡象：${ok.length}/3${ok.length ? `（${ok.join('、')}）` : ' 還沒出現'}`];
+};
 const premTxt = p => p > 0 ? `貴 ${p}%` : p < 0 ? `便宜 ${-p}%` : '一樣';
 const fmtLadder = ladder => ladder.map(l => `第${l.n}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、');
 
@@ -226,6 +232,7 @@ async function premarket() {
     ...riskLines(r),
     ...buyLines(ladder, estEtf, '開盤可能就到'),
     ...supLine(etf.rows.filter(r => r.d < dT), estEtf),
+    ...stopLine(L),
     `⏸ 結論：開盤前還不能判斷你的規則，盤中符合會震動通知你${nav && nav.prem > 0 ? `（目前比淨值貴 ${nav.prem}%，這項不符合）` : ''}`,
     `上次收盤 ${L.prev}（${dT.slice(5).replace('-', '/')}）｜依美股推估，僅供參考｜${clock}`,
   ].join('\n');
@@ -307,6 +314,7 @@ async function evening() {
     ...riskLines(r),
     ...buyLines(ladderOf(L), est, '明天開盤可能就到'),
     ...supLine(upTo(etfD), est ?? bar.c),
+    ...stopLine(L),
     '⏸ 結論：明天盤中照你的規則判斷，符合會震動通知你',
     clock,
   ].join('\n');

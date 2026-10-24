@@ -74,6 +74,7 @@ section{display:none}section.on{display:block}
     <div class="panel" id="ovRisk"><div class="mute">風險等級</div><div class="big">—</div></div>
   </div>
   <div class="panel"><h2>買點（你的分批）</h2><div id="ovBuy"></div></div>
+  <div class="panel"><h2>止跌跡象</h2><div id="ovStop"></div></div>
   <div class="panel"><h2>支撐與壓力</h2><div id="ovSR"></div></div>
   <div class="panel"><h2>最新推播</h2><div id="ovSig" class="mute">載入中…</div></div>
 </section>
@@ -636,6 +637,14 @@ async function renderOverview() {
     $('ovChg').innerHTML = `<span class="${cls(ch)}">${sgn(ch)}（${sgn(ch / d.rows[N - 1].c * 100)}%）</span>`;
     $('ovTime').textContent = marketTime(d.meta);
     $('ovSR').innerHTML = srHtml(d);
+    // 止跌跡象：和 alert.mjs 的 stopSigns 同三項
+    const x = d.ind, M = x.c.length - 1, stop = [
+      [x.K[M] > x.D[M] && x.K[M] < 30, 'KD 低檔翻頭', `K ${fmt(x.K[M], 1)} / D ${fmt(x.D[M], 1)}${x.K[M] < 20 ? '，已跌很深' : ''}`],
+      [x.hist[M] < 0 && Math.abs(x.hist[M]) < Math.abs(x.hist[M - 1]), '下跌力道變小', `MACD 柱 ${fmt(x.hist[M - 1], 3)} → ${fmt(x.hist[M], 3)}`],
+      [x.c[M] > x.ma5[M], '站回 5 日平均', `收盤 ${fmt(x.c[M])}，5 日平均 ${fmt(x.ma5[M])}`]];
+    $('ovStop').innerHTML = `<div class="big" style="font-size:22px">${stop.filter(s => s[0]).length} / 3</div>
+      ${stop.map(([ok, t, v]) => `<div>${ok ? '✅' : '❌'} ${t} <span class="mute" style="font-size:12px">${v}</span></div>`).join('')}
+      <div class="mute" style="font-size:12px;margin-top:6px">價格到支撐時，這三項出現越多，越像跌勢要停；全部 ❌ 代表還在跌。KD、MACD 的圖在「行情」分頁。</div>`;
     const lad = buyLadder(d);
     $('ovBuy').innerHTML = lad.length ? `<div class="buy">${lad.map((r, i) => {
       const gap = (r.p / p - 1) * 100, hit = r.p >= p;
