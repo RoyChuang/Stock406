@@ -53,16 +53,16 @@ td:first-child,th:first-child{text-align:left}
   <div class="two">
     <div class="panel">
       <h2 id="chartTitle">K 線</h2>
-      <div class="legend">K 線 · <span style="color:#f0b429">MA5</span> · <span style="color:#58a6ff">MA20</span> · <span style="color:#bc8cff">MA60</span> · <span style="color:#8b949e">布林通道(20,2)</span></div>
+      <div class="legend">每根 K 棒是一天（紅漲綠跌）· <span style="color:#f0b429">5 日平均價</span> · <span style="color:#58a6ff">月平均價</span> · <span style="color:#bc8cff">季平均價</span> · <span style="color:#8b949e">虛線：布林上下緣（近期正常波動的範圍）</span></div>
       <div id="cPrice" class="chart"></div>
-      <div class="legend">MACD(12,26,9)：<span style="color:#58a6ff">DIF</span> · <span style="color:#f0b429">DEA</span> · 柱狀體</div>
+      <div class="legend">MACD 漲跌力道：紅柱＝上漲力道、綠柱＝下跌力道，柱子變短代表力道減弱（<span style="color:#58a6ff">快線</span> · <span style="color:#f0b429">慢線</span>）</div>
       <div id="cMacd" class="chart sm"></div>
-      <div class="legend">KD(9,3,3)：<span style="color:#58a6ff">K</span> · <span style="color:#f0b429">D</span> · <span style="color:#bc8cff">RSI14</span>（20/80 參考線）</div>
+      <div class="legend">短線冷熱（0–100）：<span style="color:#58a6ff">K</span> · <span style="color:#f0b429">D</span> · <span style="color:#bc8cff">RSI</span>。20 以下代表跌很多、偏冷；80 以上代表漲很多、偏熱</div>
       <div id="cOsc" class="chart sm"></div>
     </div>
     <div>
       <div class="panel"><h2 id="indTitle">指標</h2><div class="tblwrap"><table id="indTbl"></table></div></div>
-      <div class="panel"><h2>關鍵價位（由指標自動算出）</h2><div class="tblwrap"><table id="lvlTbl"></table></div></div>
+      <div class="panel"><h2>重要價位（由近期價格自動算出）</h2><div class="tblwrap"><table id="lvlTbl"></table></div></div>
     </div>
   </div>
 
@@ -82,24 +82,24 @@ td:first-child,th:first-child{text-align:left}
       <div>
         <h2>分批加碼試算</h2>
         <div class="tblwrap"><table id="ladder"></table></div>
-        <div class="legend">價位預設只取現價以下的支撐（現價、近 20 日低、布林下軌、近 60 日低，不足三檔時用 -5%、-10% 補齊）。可以直接修改；行情變動後可按「依最新價重設價位」。MA5、月線屬於「站回才確認止跌」的價位，列在下週觀察重點，不放在分批掛單。</div>
+        <div class="legend">價位預設只取比現價低、過去常止跌的價位（現價、近 1 個月最低、布林下緣、近 3 個月最低，不到三個時用現價 -5%、-10% 補齊）。可以直接修改；行情變動後可按「依最新價重設價位」。5 日平均價、月平均價是「漲回去才代表止跌」的價位，列在觀察重點，不放在分批買進。</div>
       </div>
     </div>
   </div>
 
   <div class="panel">
-    <h2>下週觀察重點（00406A）</h2>
+    <h2>觀察重點（00406A）</h2>
     <div id="watch"></div>
   </div>
 
   <div class="panel">
     <h2>業界常見進場策略（一般性說明）</h2>
     <div class="strat">
-      <div><h3>① 金字塔分批</h3>把預定總預算分成 3–4 份，價格越低買越多（例如 1:2:3），每一份都事先綁定價位。優點是均價下降比較有效率；缺點是如果一路下跌，總曝險也會跟著放到最大。</div>
-      <div><h3>② 訊號確認再進</h3>不搶最低點，等止跌訊號出現再進場，例如 KD 在 20 以下黃金交叉、MACD 柱狀體連續縮短、收盤站回 MA5 或 MA20。會少賺最低的一段，但比較不容易接到「下跌的刀」。</div>
+      <div><h3>① 金字塔分批</h3>把預定總預算分成 3–4 份，價格越低買越多（例如 1:2:3），每一份都事先定好價格。優點是平均成本降得比較快；缺點是如果一路下跌，投入的錢也會全部用完。</div>
+      <div><h3>② 等止跌再買</h3>不搶最低點，等跌勢停下來的跡象出現再買，例如 KD 在 20 以下翻頭向上、MACD 綠柱連續變短、收盤漲回 5 日或月平均價之上。會錯過最低的那一段，但比較不容易買在半山腰。</div>
       <div><h3>③ 定期定額</h3>固定日期、固定金額買進，不看盤勢。適合以領息為主、不想擇時的投資人，可以平均掉短線波動。</div>
-      <div><h3>④ 配息再投入</h3>把每月配息再買回同一檔，或改買其他標的分散。可以觀察淨值有沒有被配息侵蝕：如果淨值一路走低，代表「高配息」有一部分是在還你本金。</div>
-      <div><h3>⑤ 曝險上限與停損</h3>先決定單一商品最多佔總資產的比例，以及在什麼條件下不再加碼，例如跌破近 60 日低點或大盤跌破季線。規則要在進場前就寫好。</div>
+      <div><h3>④ 配息再投入</h3>把每月配息再買回同一檔，或改買其他標的分散。可以觀察淨值（基金實際價值）有沒有被配息吃掉：如果淨值一路走低，代表「高配息」有一部分是把你的本金還給你。</div>
+      <div><h3>⑤ 投入上限與停損</h3>先決定一檔最多佔總資產幾成，以及在什麼情況下不再加碼，例如跌破近 3 個月最低價，或大盤跌破季平均價。規則要在買之前就寫好。</div>
       <div><h3>⑥ 避開除息前追價</h3>除息當天股價會扣掉配息，只為了卡位領息而追價，本質上只是把錢換個口袋，還可能增加稅負和二代健保補充保費。</div>
     </div>
   </div>
@@ -116,8 +116,8 @@ const SYMBOLS = [
   { s: '^IXIC', n: 'Nasdaq', dp: 0 },
   { s: '^SOX', n: '費城半導體', dp: 0 },
   { s: '^VIX', n: 'VIX 恐慌指數', dp: 2 },
-  { s: 'TSM', n: '台積電 ADR (USD)', dp: 2 },
-  { s: 'EWT', n: 'EWT 台股 ETF (USD)', dp: 2 },
+  { s: 'TSM', n: '台積電美股（美元）', dp: 2 },
+  { s: 'EWT', n: '美股的台股 ETF（美元）', dp: 2 },
   { s: 'TWD=X', n: '美元兌台幣', dp: 3 },
   { s: 'NVDA', n: 'NVIDIA', dp: 2 },
   { s: '^TNX', n: '美債 10 年殖利率', dp: 3 },
@@ -169,20 +169,20 @@ function signals(sym, x) {
   const inv = INVERSE[sym];
   const B = inv ? 'bear' : 'bull', S = inv ? 'bull' : 'bear';
   if (x.ma20[N] != null && x.ma60[N] != null) {
-    if (p > x.ma20[N] && x.ma20[N] > x.ma60[N]) t.push([B, inv ? inv[0] : '多頭排列']);
-    else if (p < x.ma20[N] && x.ma20[N] < x.ma60[N]) t.push([S, inv ? inv[1] : '空頭排列']);
-    else t.push(['neu', p > x.ma20[N] ? '站上月線' : '跌破月線']);
+    if (p > x.ma20[N] && x.ma20[N] > x.ma60[N]) t.push([B, inv ? inv[0] : '上漲趨勢']);
+    else if (p < x.ma20[N] && x.ma20[N] < x.ma60[N]) t.push([S, inv ? inv[1] : '下跌趨勢']);
+    else t.push(['neu', p > x.ma20[N] ? '在月平均價之上' : '跌破月平均價']);
   }
   const hN = x.hist[N], h1 = x.hist[N - 1];
-  if (x.dif[N] > x.dea[N] && x.dif[N - 1] <= x.dea[N - 1]) t.push([B, 'MACD 黃金交叉']);
-  else if (x.dif[N] < x.dea[N] && x.dif[N - 1] >= x.dea[N - 1]) t.push([S, 'MACD 死亡交叉']);
-  else if (hN < 0) t.push([Math.abs(hN) < Math.abs(h1) ? 'neu' : S, Math.abs(hN) < Math.abs(h1) ? 'MACD 綠柱縮短' : 'MACD 綠柱擴大']);
-  else t.push([hN < h1 ? 'neu' : B, hN < h1 ? 'MACD 紅柱縮短' : 'MACD 紅柱擴大']);
-  if (x.K[N] < 20) t.push(['neu', x.K[N] > x.D[N] && x.K[N - 1] <= x.D[N - 1] ? 'KD 低檔黃金交叉' : 'KD 超賣區']);
-  else if (x.K[N] > 80) t.push(['neu', 'KD 超買區']);
-  if (x.rsi[N] < 30) t.push(['neu', 'RSI 超賣']); else if (x.rsi[N] > 70) t.push(['neu', 'RSI 超買']);
-  if (x.bbL[N] != null && p < x.bbL[N]) t.push(['neu', '跌破布林下軌']);
-  else if (x.bbU[N] != null && p > x.bbU[N]) t.push(['neu', '突破布林上軌']);
+  if (x.dif[N] > x.dea[N] && x.dif[N - 1] <= x.dea[N - 1]) t.push([B, 'MACD 轉強']);
+  else if (x.dif[N] < x.dea[N] && x.dif[N - 1] >= x.dea[N - 1]) t.push([S, 'MACD 轉弱']);
+  else if (hN < 0) t.push([Math.abs(hN) < Math.abs(h1) ? 'neu' : S, Math.abs(hN) < Math.abs(h1) ? '下跌力道變小' : '下跌力道變大']);
+  else t.push([hN < h1 ? 'neu' : B, hN < h1 ? '上漲力道變小' : '上漲力道變大']);
+  if (x.K[N] < 20) t.push(['neu', x.K[N] > x.D[N] && x.K[N - 1] <= x.D[N - 1] ? 'KD 低檔翻頭向上' : '短線跌深（KD）']);
+  else if (x.K[N] > 80) t.push(['neu', '短線漲多（KD）']);
+  if (x.rsi[N] < 30) t.push(['neu', '短線跌深（RSI）']); else if (x.rsi[N] > 70) t.push(['neu', '短線漲多（RSI）']);
+  if (x.bbL[N] != null && p < x.bbL[N]) t.push(['neu', '跌破布林下緣']);
+  else if (x.bbU[N] != null && p > x.bbU[N]) t.push(['neu', '突破布林上緣']);
   return t;
 }
 
@@ -266,18 +266,18 @@ function gapCards() {
   const a = adrPremium(), g = ewtGap(), e = DATA['00406A.TW'];
   let html = '';
   if (a) html += `<div class="card" style="cursor:default">
-      <div class="mute">台積電 ADR 溢價</div>
+      <div class="mute">台積電美股比台股貴多少</div>
       <div class="px">${sgn(a.now * 100)}%</div>
-      <div class="mute" style="font-size:12px">ADR 換算 ${fmt(a.adrTwd, 0)} 元 · 20 日均溢價 ${sgn(a.base * 100)}%</div>
-      <div style="font-size:12px">依均溢價推算台積電 <b class="${cls(a.chg)}">${fmt(a.implied, 0)}（${sgn(a.chg * 100)}%）</b></div>
+      <div class="mute" style="font-size:12px">美股換算成台股每股 ${fmt(a.adrTwd, 0)} 元 · 平常（近 20 天平均）貴 ${sgn(a.base * 100)}%</div>
+      <div style="font-size:12px">照平常差距推算台積電 <b class="${cls(a.chg)}">${fmt(a.implied, 0)}（${sgn(a.chg * 100)}%）</b></div>
     </div>`;
   if (g) html += g.intraday
-    ? `<div class="card" style="cursor:default"><div class="mute">EWT 推估加權跳空</div><div class="mute">台股盤中，暫不適用</div></div>`
+    ? `<div class="card" style="cursor:default"><div class="mute">用美股預估台股開盤</div><div class="mute">台股交易中，暫不適用</div></div>`
     : `<div class="card" style="cursor:default">
-      <div class="mute">EWT 推估加權跳空</div>
+      <div class="mute">用美股預估台股開盤</div>
       <div class="px ${cls(g.gap)}">${sgn(g.gap * 100)}%</div>
-      <div class="mute" style="font-size:12px">EWT(台幣計) ${g.from.slice(5)} 起 ${sgn(g.ewtChg * 100)}%，加權 ${g.twDate.slice(5)} 已反映 ${sgn(g.twChg * 100)}%</div>
-      <div style="font-size:12px">推估加權 <b class="${cls(g.gap)}">${fmt(g.implied, 0)}</b>${e && !e.error ? ` · 00406A 約 <b class="${cls(g.gap)}">${fmt(e.rows.at(-1).c * (1 + g.gap))}</b>` : ''}</div>
+      <div class="mute" style="font-size:12px">美股的台股 ETF（換成台幣）${g.from.slice(5)} 起 ${sgn(g.ewtChg * 100)}%，扣掉台股 ${g.twDate.slice(5)} 已經${g.twChg < 0 ? '跌' : '漲'}的 ${sgn(g.twChg * 100)}%</div>
+      <div style="font-size:12px">預估大盤 <b class="${cls(g.gap)}">${fmt(g.implied, 0)}</b>${e && !e.error ? ` · 00406A 約 <b class="${cls(g.gap)}">${fmt(e.rows.at(-1).c * (1 + g.gap))}</b>` : ''}</div>
     </div>`;
   return html;
 }
@@ -331,13 +331,13 @@ function renderDetail() {
   const rel = v => v == null ? '' : `<span class="${cls(p - v)}">${sgn((p / v - 1) * 100)}%</span>`;
   const R = [
     ['收盤 / 現價', fmt(p, dp), rows[N].d],
-    ['MA5', fmt(x.ma5[N], dp), rel(x.ma5[N])], ['MA20 月線', fmt(x.ma20[N], dp), rel(x.ma20[N])],
-    ['MA60 季線', fmt(x.ma60[N], dp), rel(x.ma60[N])], ['MA120 半年線', fmt(x.ma120[N], dp), rel(x.ma120[N])],
-    ['MACD DIF / DEA', `${fmt(x.dif[N], 3)} / ${fmt(x.dea[N], 3)}`, x.dif[N] > 0 ? '零軸上' : '零軸下'],
-    ['MACD 柱 (今/昨)', `${fmt(x.hist[N], 3)} / ${fmt(x.hist[N - 1], 3)}`, Math.abs(x.hist[N]) < Math.abs(x.hist[N - 1]) ? '縮短' : '擴大'],
-    ['RSI14', fmt(x.rsi[N], 1), x.rsi[N] < 30 ? '超賣' : x.rsi[N] > 70 ? '超買' : '中性'],
-    ['K / D', `${fmt(x.K[N], 1)} / ${fmt(x.D[N], 1)}`, x.K[N] > x.D[N] ? 'K&gt;D' : 'K&lt;D'],
-    ['布林上 / 下軌', `${fmt(x.bbU[N], dp)} / ${fmt(x.bbL[N], dp)}`, ''],
+    ['5 日平均價', fmt(x.ma5[N], dp), rel(x.ma5[N])], ['月平均價（20 日）', fmt(x.ma20[N], dp), rel(x.ma20[N])],
+    ['季平均價（60 日）', fmt(x.ma60[N], dp), rel(x.ma60[N])], ['半年平均價（120 日）', fmt(x.ma120[N], dp), rel(x.ma120[N])],
+    ['MACD 快線 / 慢線', `${fmt(x.dif[N], 3)} / ${fmt(x.dea[N], 3)}`, x.dif[N] > 0 ? '大方向偏漲' : '大方向偏跌'],
+    ['MACD 柱（今 / 昨）', `${fmt(x.hist[N], 3)} / ${fmt(x.hist[N - 1], 3)}`, `${x.hist[N] < 0 ? '下跌' : '上漲'}力道${Math.abs(x.hist[N]) < Math.abs(x.hist[N - 1]) ? '變小' : '變大'}`],
+    ['RSI 冷熱（0–100）', fmt(x.rsi[N], 1), x.rsi[N] < 30 ? '跌深' : x.rsi[N] > 70 ? '漲多' : '普通'],
+    ['KD 冷熱（K / D）', `${fmt(x.K[N], 1)} / ${fmt(x.D[N], 1)}`, x.K[N] > x.D[N] ? '短線往上' : '短線往下'],
+    ['布林上緣 / 下緣', `${fmt(x.bbU[N], dp)} / ${fmt(x.bbL[N], dp)}`, '正常波動範圍'],
     ['5 日 / 20 日漲跌', `<span class="${cls(p - x.c[N - 5])}">${sgn((p / x.c[N - 5] - 1) * 100)}%</span> / <span class="${cls(p - x.c[N - 20])}">${sgn((p / x.c[N - 20] - 1) * 100)}%</span>`, ''],
   ];
   $('indTbl').innerHTML = R.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td class="mute">${r[2]}</td></tr>`).join('');
@@ -348,8 +348,8 @@ function renderDetail() {
 function levels(x, rows, dp) {
   const N = x.c.length - 1;
   const lo20 = Math.min(...x.l.slice(-20)), hi20 = Math.max(...x.h.slice(-20)), lo60 = Math.min(...x.l.slice(-60)), hi60 = Math.max(...x.h.slice(-60));
-  return [['近 60 日高', hi60], ['近 20 日高', hi20], ['布林上軌', x.bbU[N]], ['MA60 季線', x.ma60[N]], ['MA20 月線', x.ma20[N]], ['MA5', x.ma5[N]],
-    ['布林下軌', x.bbL[N]], ['近 20 日低', lo20], ['近 60 日低', lo60]].filter(r => r[1] != null).sort((a, b) => b[1] - a[1]);
+  return [['近 3 個月最高', hi60], ['近 1 個月最高', hi20], ['布林上緣', x.bbU[N]], ['季平均價', x.ma60[N]], ['月平均價', x.ma20[N]], ['5 日平均價', x.ma5[N]],
+    ['布林下緣', x.bbL[N]], ['近 1 個月最低', lo20], ['近 3 個月最低', lo60]].filter(r => r[1] != null).sort((a, b) => b[1] - a[1]);
 }
 
 // ---------- 部位 ----------
@@ -368,7 +368,7 @@ function renderPosition() {
     <span>現價</span><b>${fmt(p)}</b>
     <span>持有成本</span><b>${fmt(cost, 0)}</b>
     <span>市值</span><b>${fmt(mv, 0)}</b>
-    <span>價差損益</span><b class="${cls(pl)}">${sgn(pl).replace(/\.\d+$/, '')}（${sgn(pl / cost * 100)}%）</b>
+    <span>買賣價差損益</span><b class="${cls(pl)}">${sgn(pl).replace(/\.\d+$/, '')}（${sgn(pl / cost * 100)}%）</b>
     <span>含配息總損益</span><b class="${cls(tot)}">${sgn(tot).replace(/\.\d+$/, '')}（${sgn(tot / cost * 100)}%）</b>
     <span>回本價（扣已領息）</span><b>${fmt((cost - pos.divs) / sh)}</b>
     <span>若再跌 10%</span><b class="down">${fmt(-mv * 0.1, 0)}</b>
@@ -378,7 +378,7 @@ function renderPosition() {
 // 分批價位只取「現價以下」的支撐：現價、近 20 日低、布林下軌、近 60 日低；彼此差距 <0.5% 視為同一價位
 function defaultLadder(d, qs = []) {
   const x = d.ind, N = x.c.length - 1, p = d.meta.regularMarketPrice ?? x.c[N];
-  const cand = [['現價', p], ['近 20 日低', Math.min(...x.l.slice(-20))], ['布林下軌', x.bbL[N]], ['近 60 日低', Math.min(...x.l.slice(-60))]]
+  const cand = [['現價', p], ['近 1 個月最低', Math.min(...x.l.slice(-20))], ['布林下緣', x.bbL[N]], ['近 3 個月最低', Math.min(...x.l.slice(-60))]]
     .filter(([, v]) => v != null && v <= p).sort((a, b) => b[1] - a[1]);
   const out = [];
   for (const [src, v] of cand) if (!out.length || (out.at(-1).p - v) / out.at(-1).p >= 0.005) out.push({ src, p: +v.toFixed(2) });
@@ -408,7 +408,7 @@ function renderLadder(pos, ladder) {
   const rows = ladder.map((r, i) => {
     sh += r.q * 1000; cost += r.q * 1000 * r.p;
     const above = now != null && r.p > now;
-    return `<tr><td>第 ${i + 1} 批</td><td class="mute">${r.src || '自訂'}</td><td><input data-i="${i}" data-k="p" type="number" step="0.01" value="${r.p}" style="width:80px">${above ? '<div class="warn" style="font-size:11px">高於現價，限價單會直接成交</div>' : ''}</td>
+    return `<tr><td>第 ${i + 1} 批</td><td class="mute">${r.src || '自訂'}</td><td><input data-i="${i}" data-k="p" type="number" step="0.01" value="${r.p}" style="width:80px">${above ? '<div class="warn" style="font-size:11px">比現價高，掛這個價會馬上用現價買到</div>' : ''}</td>
       <td><input data-i="${i}" data-k="q" type="number" step="1" value="${r.q}" style="width:60px"> 張</td>
       <td>${fmt(cost / sh)}</td><td>${fmt(cost, 0)}</td></tr>`;
   }).join('');
@@ -432,19 +432,19 @@ function renderWatch() {
   if (!d || d.error) { $('watch').innerHTML = '<span class="err">資料不足</span>'; return; }
   const x = d.ind, N = x.c.length - 1, p = x.c[N];
   const items = [];
-  const ok = (cond, good, bad) => items.push(`<li class="${cond ? 'up' : 'mute'}">${cond ? '✔ ' : '○ '}${cond ? good : bad}</li>`);
-  items.push('<li><b>止跌確認類訊號（目前狀態）</b><ul>');
-  ok(x.K[N] > x.D[N] && x.K[N] < 30, 'KD 已在低檔 K>D', `KD 尚未低檔交叉（K ${fmt(x.K[N], 1)} / D ${fmt(x.D[N], 1)}）`);
-  ok(x.hist[N] < 0 && Math.abs(x.hist[N]) < Math.abs(x.hist[N - 1]), 'MACD 綠柱已縮短', 'MACD 綠柱尚未縮短');
-  ok(p > x.ma5[N], `收盤已站上 MA5（${fmt(x.ma5[N])}）`, `收盤尚未站上 MA5（${fmt(x.ma5[N])}）`);
-  ok(p > x.ma20[N], `收盤已站上月線（${fmt(x.ma20[N])}）`, `收盤尚未站上月線（${fmt(x.ma20[N])}）`);
-  if (vix && !vix.error) { const v = vix.ind.c.at(-1); ok(v < 18, `VIX 已回落至 18 以下（${fmt(v)}）`, `VIX 仍在 ${fmt(v)}，未回落至 18 以下`); }
-  if (sox && !sox.error) { const s = sox.ind; ok(s.c.at(-1) > s.ma5.at(-1), '費半已站回 MA5', '費半仍在 MA5 之下'); }
+  const ok = (cond, good, bad) => items.push(`<li class="${cond ? 'up' : 'mute'}" style="list-style:none">${cond ? '✅ ' : '❌ '}${cond ? good : bad}</li>`);
+  items.push('<li><b>止跌跡象（✅ 越多越像跌勢要停）</b><ul>');
+  ok(x.K[N] > x.D[N] && x.K[N] < 30, 'KD 在低檔翻頭向上', `KD 還沒在低檔翻頭向上（K ${fmt(x.K[N], 1)} / D ${fmt(x.D[N], 1)}）`);
+  ok(x.hist[N] < 0 && Math.abs(x.hist[N]) < Math.abs(x.hist[N - 1]), 'MACD 下跌力道變小', 'MACD 下跌力道還沒變小');
+  ok(p > x.ma5[N], `收盤已回到 5 日平均價之上（${fmt(x.ma5[N])}）`, `收盤還在 5 日平均價之下（${fmt(x.ma5[N])}）`);
+  ok(p > x.ma20[N], `收盤已回到月平均價之上（${fmt(x.ma20[N])}）`, `收盤還在月平均價之下（${fmt(x.ma20[N])}）`);
+  if (vix && !vix.error) { const v = vix.ind.c.at(-1); ok(v < 18, `美股恐慌指數 VIX 已降到 18 以下（${fmt(v)}）`, `美股恐慌指數 VIX 還在 ${fmt(v)}，沒降到 18 以下`); }
+  if (sox && !sox.error) { const s = sox.ind; ok(s.c.at(-1) > s.ma5.at(-1), '美國半導體股已回到 5 日平均之上', '美國半導體股還在 5 日平均之下'); }
   items.push('</ul></li>');
-  items.push('<li><b>轉弱警示類（若發生代表跌勢延續）</b><ul>');
-  items.push(`<li>00406A 收盤跌破布林下軌 ${fmt(x.bbL[N])}／近 60 日低 ${fmt(Math.min(...x.l.slice(-60)))}</li>`);
-  if (tw && !tw.error) { const t = tw.ind; items.push(`<li>加權指數跌破季線 ${fmt(t.ma60.at(-1), 0)}、半年線 ${fmt(t.ma120.at(-1), 0)}（目前 ${fmt(t.c.at(-1), 0)}）</li>`); }
-  items.push('<li>VIX 突破 25，代表恐慌情緒升溫</li></ul></li>');
+  items.push('<li><b>⚠️ 要小心（發生的話代表還在跌）</b><ul>');
+  items.push(`<li>00406A 收盤跌破布林下緣 ${fmt(x.bbL[N])}（近期正常波動的底部）／近 3 個月最低 ${fmt(Math.min(...x.l.slice(-60)))}</li>`);
+  if (tw && !tw.error) { const t = tw.ind; items.push(`<li>大盤跌破季平均 ${fmt(t.ma60.at(-1), 0)}、半年平均 ${fmt(t.ma120.at(-1), 0)}（目前 ${fmt(t.c.at(-1), 0)}）</li>`); }
+  items.push('<li>VIX 超過 25，代表市場很恐慌</li></ul></li>');
   items.push('<li><b>事件</b><ul><li>00406A 下次除息預估 11/3，最後買進日 11/2（週一），金額以投信公告為準</li><li>美股科技巨頭財報週、FOMC 利率決策（日期請查證）</li></ul></li>');
   $('watch').innerHTML = `<ul style="margin:0;padding-left:18px">${items.join('')}</ul>`;
 }
