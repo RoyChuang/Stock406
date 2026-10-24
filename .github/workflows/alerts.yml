@@ -35,26 +35,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # 測試時只跑 alert-test.txt 第一行 modes: 列出的類型（例如 modes: premarket），沒寫就三種都跑
+      - name: Test modes
+        if: github.event_name != 'schedule'
+        run: |
+          m=$(head -1 .github/alert-test.txt | sed -n 's/^modes:s*//p')
+          echo "TEST_MODES=${m:-premarket evening intraday}" >> $GITHUB_ENV
       - name: Premarket briefing
-        if: github.event_name != 'schedule' || github.event.schedule == '30 0 * * 1-6'
+        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'premarket')) || github.event.schedule == '30 0 * * 1-6'
         run: node scripts/alert.mjs
         env:
           MODE: premarket
       - name: Evening review
-        if: github.event_name != 'schedule' || github.event.schedule == '0 14 * * 1-5' || github.event.schedule == '45 14 * * 1-5'
+        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'evening')) || github.event.schedule == '0 14 * * 1-5' || github.event.schedule == '45 14 * * 1-5'
         run: node scripts/alert.mjs
         env:
           MODE: evening
           EVENING_SLOT: ${{ github.event.schedule == '0 14 * * 1-5' && 'dst' || github.event.schedule == '45 14 * * 1-5' && 'std' || '' }}
       # 用快取保存當天已推播的訊號，避免重複推
       - uses: actions/cache/restore@v4
-        if: github.event_name != 'schedule' || github.event.schedule == '*/5 1-5 * * 1-5'
+        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'intraday')) || github.event.schedule == '*/5 1-5 * * 1-5'
         with:
           path: alert-state.json
           key: alert-state-${{ github.run_id }}
           restore-keys: alert-state-
       - name: Intraday signals
-        if: github.event_name != 'schedule' || github.event.schedule == '*/5 1-5 * * 1-5'
+        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'intraday')) || github.event.schedule == '*/5 1-5 * * 1-5'
         run: node scripts/alert.mjs
       # 測試模式不保存去重紀錄，免得影響正式提醒
       - uses: actions/cache/save@v4

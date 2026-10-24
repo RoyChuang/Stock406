@@ -167,6 +167,8 @@ async function premarket() {
   // ADR 法：20 日平均溢價推算台積電
   const A = byDate(adr), hist = upTo(t2330).filter(r => A[r.d] && F[r.d]).map(r => A[r.d] * F[r.d] / 5 / r.c - 1).slice(-20);
   const base = hist.reduce((a, v) => a + v, 0) / hist.length, adrGap = adr.px * fx.px / 5 / (1 + base) / upTo(t2330).at(-1).c - 1;
+  // 台積電美股從台股 dT 開盤前最後一個美股收盤算起的漲跌（和 EWT 法同一段時間）
+  const tsmTw = upTo(t2330).at(-1).c, adrTwd = adr.px * fx.px / 5, adrB = [...adr.rows].reverse().find(r => r.d < dT);
 
   const estTw = twRows.at(-1).c * (1 + gap), estEtf = +(L.prev * (1 + gap)).toFixed(2);
   const hits = ladder.map((l, i) => `${estEtf <= l.p ? '🎯' : '⚪'} 第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`);
@@ -183,13 +185,17 @@ async function premarket() {
     : `盤前：預估大盤 ${pct(gap * 100)}，00406A 約 ${estEtf}`;
   const msg = [
     `美股收盤（${usDate.slice(5).replace('-', '/')}）：S&P 500 ${usChg(gspc)}｜Nasdaq ${usChg(ixic)}｜美國半導體 ${usChg(sox)}`,
-    `台積電美股 ${usChg(adr)}｜美股的台股 ETF ${usChg(ewt)}`,
+    `美股的台股 ETF ${usChg(ewt)}｜台積電美股 ${usChg(adr)}（詳見下方）`,
     ``,
     `用美股推估台股${twClosed ? '下次' : ''}開盤（從上次台股收盤到現在的美股變化）：`,
     `大盤（加權指數）約 ${estTw.toFixed(0)}（${pct(gap * 100)}）`,
-    `台積電約 ${pct(adrGap * 100)}`,
     `00406A 上次收盤 ${L.prev}（${md}）→ 預估${twClosed ? '下次' : ''}開盤約 ${estEtf}`,
     nav ? `上次收盤時，市價比基金實際價值（淨值 ${nav.nav}）${premTxt(nav.prem)}` : '市價與淨值比較：讀取失敗',
+    ``,
+    `【台積電】`,
+    `台積電美股收 ${adr.px.toFixed(2)} 美元（昨晚 ${usChg(adr)}，從台股 ${md} 收盤後算起 ${pct((adr.px / adrB.c - 1) * 100)}）`,
+    `換算成台股每股約 ${adrTwd.toFixed(0)} 元，比台股上次收盤 ${tsmTw.toFixed(0)} 貴 ${((adrTwd / tsmTw - 1) * 100).toFixed(1)}%（平常貴 ${(base * 100).toFixed(1)}%）`,
+    `照平常差距推算，台積電${twClosed ? '下次' : ''}開盤約 ${(tsmTw * (1 + adrGap)).toFixed(0)}（${pct(adrGap * 100)}）`,
     ``,
     `你的分批價位（🎯 預估開盤會跌到、⚪ 不會）：`, ...hits,
     `🎯 的價位如果掛了買單，開盤就可能直接用開盤價買到。`,
