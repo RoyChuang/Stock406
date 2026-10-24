@@ -175,7 +175,7 @@ async function premarket() {
   const msg = [
     ...riskLines(r),
     ...buyLines(ladder, estEtf, '開盤可能就到'),
-    `你的規則：開盤後才能判斷 B、C${nav ? `；${nav.prem > 0 ? `❌ 目前比淨值貴 ${nav.prem}%` : `✅ 沒有比淨值貴`}` : ''}`,
+    `⏸ 結論：開盤前還不能判斷你的規則，盤中符合會震動通知你${nav && nav.prem > 0 ? `（目前比淨值貴 ${nav.prem}%，這項不符合）` : ''}`,
     `上次收盤 ${L.prev}（${dT.slice(5).replace('-', '/')}）｜依美股推估，僅供參考｜${clock}`,
   ].join('\n');
   await push(title, msg, 2, ['sunrise']);
@@ -223,6 +223,7 @@ async function evening() {
     est != null ? `明天：依目前美股推估 00406A 約 ${est}（${pct(gap * 100)}），美股還沒收盤，明早 8:30 再更新` : '明天：美股還沒開盤，明早 8:30 推估',
     ...riskLines(r),
     ...buyLines(ladderOf(L), est, '明天開盤可能就到'),
+    '⏸ 結論：明天盤中照你的規則判斷，符合會震動通知你',
     clock,
   ].join('\n');
   await push(title, msg, 2, ['crescent_moon']);
@@ -265,15 +266,20 @@ async function intraday() {
   // 美期近乎 24 小時交易，用最近 15 分鐘與 60 分鐘的變化
   const fx15 = chg15(fxI.rows), nq15 = chg15(nqI.rows), nqR = nqI.rows, nq60 = nqR.length > 12 ? (nqR.at(-1).c / nqR.at(-13).c - 1) * 100 : 0;
   const C = [
-    // 每項第三欄是摘要用的短名稱
-    [nav ? nav.prem <= 0 : null, nav ? `沒有買貴：市價比基金實際價值（淨值 ${nav.nav}）${nav.prem > 0 ? `貴 ${nav.prem}%` : nav.prem < 0 ? `便宜 ${-nav.prem}%` : '一樣'}` : '市價與淨值比較：讀取失敗', '沒有買貴'],
-    [fx15 < 0.15, `台幣沒有急貶（15 分鐘 ${pct(-fx15)}）`, '台幣'],
-    [nq15 > -0.3 && nq60 > -0.6, `美股期貨沒有急跌（15 分鐘 ${pct(nq15)}、1 小時 ${pct(nq60)}）`, '美股期貨'],
-    [lowAge(day(tsmI)) >= cfg.confirmMin, `台積電今天最低價${held(day(tsmI))}`, '台積電止跌'],
-    [lowAge(day(twI)) >= cfg.confirmMin, `大盤今天最低點${held(day(twI))}`, '大盤止跌'],
+    // 每項第三欄是不符合時的短原因
+    [nav ? nav.prem <= 0 : null, nav ? `沒有買貴：市價比基金實際價值（淨值 ${nav.nav}）${nav.prem > 0 ? `貴 ${nav.prem}%` : nav.prem < 0 ? `便宜 ${-nav.prem}%` : '一樣'}` : '市價與淨值比較：讀取失敗', '比淨值貴'],
+    [fx15 < 0.15, `台幣沒有急貶（15 分鐘 ${pct(-fx15)}）`, '台幣急貶'],
+    [nq15 > -0.3 && nq60 > -0.6, `美股期貨沒有急跌（15 分鐘 ${pct(nq15)}、1 小時 ${pct(nq60)}）`, '美股期貨急跌'],
+    [lowAge(day(tsmI)) >= cfg.confirmMin, `台積電今天最低價${held(day(tsmI))}`, '台積電還在跌'],
+    [lowAge(day(twI)) >= cfg.confirmMin, `大盤今天最低點${held(day(twI))}`, '大盤還在跌'],
   ];
   const cCount = C.filter(c => c[0] === true).length, cOk = cCount >= cfg.cMin;
   const mark = arr => arr.map(([ok, t]) => `　└ ${ok === true ? '✅' : ok === false ? '❌' : '❔'} ${t}`).join('\n');
+  // 依使用者規則的一行結論（不是我的買賣建議）：到價且 B、C 都符合才是「可以照計畫買」
+  const missAll = [...(bOk ? [] : ['00406A 還在跌']), ...C.filter(c => c[0] !== true).map(c => c[2])];
+  const touched = ladder.map((l, i) => dayLow <= l.p && etf <= l.p * 1.01 ? i + 1 : 0).filter(Boolean);
+  const verdict = bOk && cOk ? (touched.length ? `✅ 結論：符合你的規則，第 ${touched.join('、')} 批可以照計畫買` : '⏸ 結論：規則符合，但還沒到你的價位')
+    : `⏸ 結論：依你的規則現在先不買（原因：${missAll.join('、')}）`;
   const detail = `${bOk ? '✅' : '❌'} B 跌勢暫停（下面任一項就算）\n${mark(B)}\n${cOk ? '✅' : '❌'} C 大環境 ${cCount}/${C.length} 項 OK（要 ${cfg.cMin} 項）\n${mark(C)}`;
 
   const signals = [];
@@ -282,8 +288,8 @@ async function intraday() {
   ladder.forEach(({ p, label }, i) => {
     if (dayLow > p || etf > p * 1.01) return;
     const name = `第 ${i + 1} 批 ${p}${label ? `（${label}）` : ''}`;
-    if (bOk && cOk) add(`met${i}`, 4, `🔴 符合你的${name}買進規則`, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${detail}`);
-    else add(`touch${i}`, 2, `🟡 ${name}到價，但規則還沒符合`, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${detail}`);
+    if (bOk && cOk) add(`met${i}`, 4, `🔴 符合你的${name}買進規則`, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}\n${detail}`);
+    else add(`touch${i}`, 2, `🟡 ${name}到價，但規則還沒符合`, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}\n${detail}`);
   });
   if (etf < L.bbL) add('bbL', 4, '⚠️ 00406A 跌破布林下緣', `現價 ${etf}，布林下緣 ${L.bbL.toFixed(2)}\n布林下緣是近期正常波動的底部，跌破代表跌勢比平常強`);
   // 急殺 / 急拉以 30 分鐘為單位去重
@@ -295,11 +301,10 @@ async function intraday() {
   const hour = Math.floor(hm / 100);
   if ((hm >= 1000 || FORCE) && !state.sent.includes(`sum${hour}`)) {
     const r = risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav });
-    const miss = C.filter(c => c[0] !== true).map(c => c[2]);
     add(`sum${hour}`, 2, `⚪ ${String(hour).padStart(2, '0')}:00 00406A ${etf}（${pct(etfChg)}）｜風險 ${r.level}`, [
       `今天最低 ${dayLow}｜${ladder.map((l, i) => `${dayLow <= l.p ? '🎯' : '⚪'}${i + 1} ${l.p}`).join(' ')}`,
       `風險：${r.reasons.join('、') || '沒有明顯風險訊號'}`,
-      `規則：B ${bOk ? '✅' : '❌'}｜C ${cCount}/${C.length}${miss.length ? `（缺：${miss.join('、')}）` : ''}${bOk && cOk ? '｜✅ 符合' : ''}`,
+      verdict,
     ].join('\n'));
   }
 
