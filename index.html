@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stock406 盤勢儀表板</title>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <style>
 :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--mute:#8b949e;--up:#f85149;--down:#3fb950;--acc:#58a6ff;--warn:#d29922}
 *{box-sizing:border-box}
@@ -39,6 +40,7 @@ td:first-child,th:first-child{text-align:left}
 .legend{font-size:12px;color:var(--mute);margin:4px 0}
 .disc{font-size:12px;color:var(--mute);border-top:1px solid var(--line);padding-top:10px}
 .err{color:var(--up)}
+input:disabled{opacity:.6}
 </style>
 </head>
 <body>
@@ -68,6 +70,7 @@ td:first-child,th:first-child{text-align:left}
 
   <div class="panel">
     <h2>我的 00406A 部位</h2>
+    <div id="auth" style="margin-bottom:10px"></div>
     <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:10px">
       <label>張數 <input id="lots" type="number" step="1" style="width:80px"></label>
       <label>均價 <input id="avg" type="number" step="0.01" style="width:90px"></label>
@@ -83,8 +86,15 @@ td:first-child,th:first-child{text-align:left}
         <h2>分批加碼試算</h2>
         <div class="tblwrap"><table id="ladder"></table></div>
         <div class="legend">價位預設只取比現價低、過去常止跌的價位（現價、近 1 個月最低、布林下緣、近 3 個月最低，不到三個時用現價 -5%、-10% 補齊）。可以直接修改；行情變動後可按「依最新價重設價位」。5 日平均價、月平均價是「漲回去才代表止跌」的價位，列在觀察重點，不放在分批買進。</div>
+        <div id="trades"></div>
       </div>
     </div>
+  </div>
+
+  <div class="panel">
+    <h2>推播紀錄（00406A）</h2>
+    <div class="tblwrap"><table id="sigTbl"></table></div>
+    <div class="legend">每次推播的價格、風險等級和依規則的結論。「1 天後 / 5 天後」是之後第 1、5 個交易日收盤相對推播價格的漲跌，每晚自動回補，用來檢討規則準不準。這裡沒有任何張數或金額。</div>
   </div>
 
   <div class="panel">
@@ -205,7 +215,7 @@ async function refreshAll() {
   $('status').textContent = '更新中…';
   const out = await Promise.allSettled(SYMBOLS.map(x => load(x.s)));
   out.forEach((o, i) => { if (o.status === 'fulfilled') DATA[SYMBOLS[i].s] = o.value; else DATA[SYMBOLS[i].s] = { error: String(o.reason) }; });
-  renderCards(); renderDetail(); renderPosition(); renderWatch();
+  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals();
   let src = '即時';
   if (!LIVE) {
     try { const u = await (await fetch(`data/updated.json?t=${Date.now()}`, { cache: 'no-store' })).json(); src = '資料抓取於 ' + new Date(u.t).toLocaleString('zh-TW'); } catch {}
@@ -352,18 +362,67 @@ function levels(x, rows, dp) {
     ['布林下緣', x.bbL[N]], ['近 1 個月最低', lo20], ['近 3 個月最低', lo60]].filter(r => r[1] != null).sort((a, b) => b[1] - a[1]);
 }
 
+// ---------- Supabase ----------
+// publishable key 本來就設計成可以公開；個人資料靠資料庫的 RLS 保護，只有登入的本人讀得到
+const SB_URL = 'https://zyecvkszwtnepipwzxki.supabase.co', SB_KEY = 'sb_publishable_E5HYrxorD4J6upv29TMaEA_KrDWcE5s';
+const sb = window.supabase?.createClient(SB_URL, SB_KEY);
+let DB = null;   // 登入後從資料庫讀到的部位：{ email, pos, ladder, trades }
+async function loadDb() {
+  DB = null;
+  const session = sb && (await sb.auth.getSession()).data.session;
+  if (session) {
+    const q = t => sb.from(t).select('*').eq('symbol', '00406A');
+    const [pos, lad, tr] = await Promise.all([q('positions'), q('ladder').order('seq'), q('trades').order('traded_on', { ascending: false }).order('id', { ascending: false }).limit(10)]);
+    DB = { email: session.user.email, pos: pos.data?.[0], ladder: lad.data || [], trades: tr.data || [] };
+  }
+  renderAuth(); renderPosition();
+}
+function renderAuth() {
+  if (!sb) { $('auth').innerHTML = '<span class="mute">登入元件載入失敗，部位只存在這個瀏覽器</span>'; return; }
+  if (DB) {
+    $('auth').innerHTML = `<span class="mute">已登入 ${DB.email} · 部位、預算、分批來自資料庫（成交後跟 Claude 說，會自動更新）</span> <button id="logout">登出</button>`;
+    $('logout').onclick = async () => { await sb.auth.signOut(); loadDb(); };
+  } else {
+    $('auth').innerHTML = `<form id="login" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <span class="mute">未登入：下面的數字只存在這個瀏覽器。</span>
+      <input id="em" type="email" placeholder="email" autocomplete="username" style="width:200px">
+      <input id="pw" type="password" placeholder="密碼" autocomplete="current-password" style="width:140px">
+      <button>登入</button><span id="loginMsg" class="err"></span></form>`;
+    $('login').onsubmit = async e => {
+      e.preventDefault();
+      const { error } = await sb.auth.signInWithPassword({ email: $('em').value, password: $('pw').value });
+      if (error) $('loginMsg').textContent = '登入失敗：' + error.message; else loadDb();
+    };
+  }
+}
+
 // ---------- 部位 ----------
 function getPos() {
   let s = {}; try { s = JSON.parse(localStorage.getItem('pos406') || '{}'); } catch {}
-  // 部位只存在瀏覽器 localStorage，不寫進公開原始碼
+  // 未登入時部位只存在瀏覽器 localStorage，不寫進公開原始碼；已領配息資料庫沒有，一律存在瀏覽器
+  if (DB) return { lots: DB.pos?.lots ?? 0, avg: +(DB.pos?.avg_price ?? 0), divs: s.divs ?? 0, budget: +(DB.pos?.budget ?? 0), cost: DB.pos?.cost, ladder: null };
   return { lots: s.lots ?? 0, avg: s.avg ?? 0, divs: s.divs ?? 0, budget: s.budget ?? 0, ladder: s.ladder };
 }
 function savePos(p) { try { localStorage.setItem('pos406', JSON.stringify(p)); } catch {} }
+// 資料庫的分批價位（prev、bbL、lo20、lo60、pctN 或固定價）換算成價格；用今天以前的日 K，和推播的算法一致
+const LVL = { prev: '上次收盤價', bbL: '布林下緣', lo20: '近 1 個月最低', lo60: '近 3 個月最低' };
+function dbLadder(d) {
+  const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10), x = d.ind;
+  const N = d.rows.at(-1).d === today ? x.c.length - 2 : x.c.length - 1;
+  const v = { prev: x.c[N], bbL: x.bbL[N], lo20: Math.min(...x.l.slice(N - 19, N + 1)), lo60: Math.min(...x.l.slice(N - 59, N + 1)) };
+  return DB.ladder.map(r => {
+    const m = /^pct(-?\d+(?:\.\d+)?)$/.exec(r.level);
+    const p = !isNaN(+r.level) ? +r.level : m ? v.prev * (1 + m[1] / 100) : v[r.level];
+    return { id: r.id, n: r.seq, src: LVL[r.level] || (m ? `上次收盤 ${m[1]}%` : '固定價'), p: +(+p).toFixed(2), q: r.lots, filled: r.status !== 'active' };
+  });
+}
 function renderPosition() {
   const pos = getPos(), d = DATA['00406A.TW'];
   $('lots').value = pos.lots; $('avg').value = pos.avg; $('divs').value = pos.divs; $('budget').value = pos.budget;
+  ['lots', 'avg', 'budget', 'resetLadder'].forEach(id => $(id).disabled = !!DB);
+  renderTrades();
   if (!d || d.error) { $('pos').innerHTML = '<span class="err">00406A 資料載入失敗</span>'; return; }
-  const p = d.meta.regularMarketPrice ?? d.ind.c.at(-1), sh = pos.lots * 1000, cost = sh * pos.avg, mv = sh * p, pl = mv - cost, tot = pl + +pos.divs;
+  const p = d.meta.regularMarketPrice ?? d.ind.c.at(-1), sh = pos.lots * 1000, cost = pos.cost ?? sh * pos.avg, mv = sh * p, pl = mv - cost, tot = pl + +pos.divs;
   $('pos').innerHTML = `
     <span>現價</span><b>${fmt(p)}</b>
     <span>持有成本</span><b>${fmt(cost, 0)}</b>
@@ -373,7 +432,13 @@ function renderPosition() {
     <span>回本價（扣已領息）</span><b>${fmt((cost - pos.divs) / sh)}</b>
     <span>若再跌 10%</span><b class="down">${fmt(-mv * 0.1, 0)}</b>
     <span>總預算 / 剩餘可投入</span><b>${fmt(+pos.budget, 0)} / ${fmt(pos.budget - cost, 0)}</b>`;
-  renderLadder(pos, pos.ladder || defaultLadder(d, [5, 10, 15]));
+  renderLadder(pos, DB ? dbLadder(d) : pos.ladder || defaultLadder(d, [5, 10, 15]));
+}
+function renderTrades() {
+  $('trades').innerHTML = DB?.trades.length ? `<h2 style="margin-top:12px">最近成交</h2><div class="tblwrap"><table>
+    <tr><th>日期</th><th>買賣</th><th>價格</th><th>張數</th><th>備註</th></tr>
+    ${DB.trades.map(t => `<tr><td>${t.traded_on}</td><td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? '買' : '賣'}</td><td>${fmt(+t.price)}</td><td>${t.lots}</td><td class="mute">${t.note || ''}</td></tr>`).join('')}
+    </table></div>` : '';
 }
 // 分批價位只取「現價以下」的支撐：現價、近 20 日低、布林下軌、近 60 日低；彼此差距 <0.5% 視為同一價位
 function defaultLadder(d, qs = []) {
@@ -386,14 +451,22 @@ function defaultLadder(d, qs = []) {
   for (const pct of [5, 10]) if (out.length < 3 && out.at(-1).p > p * (1 - pct / 100) * 1.005) out.push({ src: `現價 -${pct}%`, p: +(p * (1 - pct / 100)).toFixed(2) });
   return out.slice(0, 3).map((r, i) => ({ ...r, q: qs[i] ?? 0 }));
 }
-// 把剩餘預算依權重分到各批，張數無條件捨去
+// 登入時把張數寫回資料庫的 ladder；未登入時存在瀏覽器
+async function saveLadder(ladder) {
+  if (DB) {
+    await Promise.all(ladder.filter(r => r.id).map(r => sb.from('ladder').update({ lots: r.q, updated_at: new Date().toISOString() }).eq('id', r.id)));
+    return loadDb();
+  }
+  const p = getPos(); p.ladder = ladder; savePos(p); renderPosition();
+}
+// 把剩餘預算依權重分到各批（已買的批次不算），張數無條件捨去
 function splitBudget(weights) {
   const pos = getPos(), d = DATA['00406A.TW'];
   if (!d || d.error) return;
-  const ladder = pos.ladder || defaultLadder(d);
-  const left = pos.budget - pos.lots * 1000 * pos.avg, W = weights.reduce((a, b) => a + b, 0);
-  ladder.forEach((r, i) => r.q = Math.max(0, Math.floor(left * weights[i] / W / (r.p * 1000))));
-  pos.ladder = ladder; savePos(pos); renderPosition();
+  const ladder = DB ? dbLadder(d) : pos.ladder || defaultLadder(d), open = ladder.filter(r => !r.filled);
+  const left = pos.budget - (pos.cost ?? pos.lots * 1000 * pos.avg), w = weights.slice(0, open.length), W = w.reduce((a, b) => a + b, 0);
+  open.forEach((r, i) => r.q = Math.max(0, Math.floor(left * w[i] / W / (r.p * 1000))));
+  saveLadder(ladder);
 }
 $('split123').onclick = () => splitBudget([1, 2, 3]);
 $('splitEq').onclick = () => splitBudget([1, 1, 1]);
@@ -404,27 +477,45 @@ $('resetLadder').onclick = () => {
 };
 function renderLadder(pos, ladder) {
   const d = DATA['00406A.TW'], now = d && !d.error ? (d.meta.regularMarketPrice ?? d.ind.c.at(-1)) : null;
-  let sh = pos.lots * 1000, cost = sh * pos.avg;
+  let sh = pos.lots * 1000, cost = pos.cost ?? sh * pos.avg;
+  const open = ladder.filter(r => !r.filled);
   const rows = ladder.map((r, i) => {
+    if (r.filled) return `<tr class="mute"><td>第 ${r.n} 批</td><td>${r.src}</td><td>${fmt(r.p)}</td><td>${r.q} 張</td><td colspan="2">✔ 已買（已算進目前部位）</td></tr>`;
     sh += r.q * 1000; cost += r.q * 1000 * r.p;
     const above = now != null && r.p > now;
-    return `<tr><td>第 ${i + 1} 批</td><td class="mute">${r.src || '自訂'}</td><td><input data-i="${i}" data-k="p" type="number" step="0.01" value="${r.p}" style="width:80px">${above ? '<div class="warn" style="font-size:11px">比現價高，掛這個價會馬上用現價買到</div>' : ''}</td>
+    return `<tr><td>第 ${r.n ?? i + 1} 批</td><td class="mute">${r.src || '自訂'}</td><td><input data-i="${i}" data-k="p" type="number" step="0.01" value="${r.p}" style="width:80px"${DB ? ' disabled' : ''}>${above ? '<div class="warn" style="font-size:11px">比現價高，掛這個價會馬上用現價買到</div>' : ''}</td>
       <td><input data-i="${i}" data-k="q" type="number" step="1" value="${r.q}" style="width:60px"> 張</td>
       <td>${fmt(cost / sh)}</td><td>${fmt(cost, 0)}</td></tr>`;
   }).join('');
   $('ladder').innerHTML = `<tr><th>批次</th><th>依據</th><th>價格</th><th>張數</th><th>累計均價</th><th>累計投入</th></tr>
-    <tr><td>目前</td><td></td><td>—</td><td>${pos.lots} 張</td><td>${fmt(pos.avg)}</td><td>${fmt(pos.lots * 1000 * pos.avg, 0)}</td></tr>${rows}
-    <tr><td colspan="4">全部成交後總張數 ${fmt(sh / 1000, 0)} 張，再跌 10% 約</td><td colspan="2" class="down">${fmt(-sh * ladder.at(-1).p * 0.1, 0)}</td></tr>
-    ${cost > pos.budget ? `<tr><td colspan="6" class="warn">⚠ 累計投入 ${fmt(cost, 0)} 已超過總預算 ${fmt(+pos.budget, 0)}</td></tr>` : ''}`;
+    <tr><td>目前</td><td></td><td>—</td><td>${pos.lots} 張</td><td>${fmt(pos.avg)}</td><td>${fmt(pos.cost ?? pos.lots * 1000 * pos.avg, 0)}</td></tr>${rows}
+    ${open.length ? `<tr><td colspan="4">全部成交後總張數 ${fmt(sh / 1000, 0)} 張，再跌 10% 約</td><td colspan="2" class="down">${fmt(-sh * open.at(-1).p * 0.1, 0)}</td></tr>` : ''}
+    ${cost > pos.budget ? `<tr><td colspan="6" class="warn">⚠ 累計投入 ${fmt(cost, 0)} 已超過總預算 ${fmt(+pos.budget, 0)}</td></tr>` : ''}
+    ${DB ? '<tr><td colspan="6" class="mute" style="text-align:left">價位依資料庫的規則每天自動換算；張數可以直接改，會存回資料庫。</td></tr>' : ''}`;
   $('ladder').querySelectorAll('input').forEach(el => el.onchange = () => {
     ladder[+el.dataset.i][el.dataset.k] = +el.value;
     if (el.dataset.k === 'p') ladder[+el.dataset.i].src = '自訂';
-    const p = getPos(); p.ladder = ladder; savePos(p); renderLadder(p, ladder);
+    saveLadder(ladder);
   });
 }
 ['lots', 'avg', 'divs', 'budget'].forEach(id => $(id).addEventListener('change', () => {
-  const p = getPos(); p[id] = +$(id).value; savePos(p); renderPosition();
+  const p = getPos(); p[id] = +$(id).value;
+  if (DB) { savePos({ ...JSON.parse(localStorage.getItem('pos406') || '{}'), divs: p.divs }); } else savePos(p);
+  renderPosition();
 }));
+
+// ---------- 推播紀錄（公開） ----------
+const KIND = { premarket: '盤前', evening: '晚間', met: '✅ 符合規則', touch: '🟡 到價', bbL: '跌破下緣', fastDown: '急跌', summary: '摘要' };
+async function renderSignals() {
+  if (!sb) return;
+  const { data, error } = await sb.from('signals').select('ts,kind,title,price,risk_level,verdict,ret_1d,ret_5d').eq('symbol', '00406A').order('ts', { ascending: false }).limit(30);
+  if (error) { $('sigTbl').innerHTML = `<tr><td class="mute">推播紀錄還沒有資料（${error.message}）</td></tr>`; return; }
+  const r = v => v == null ? '<span class="mute">—</span>' : `<span class="${cls(v)}">${sgn(+v)}%</span>`;
+  $('sigTbl').innerHTML = '<tr><th>時間</th><th>類型</th><th>價格</th><th>風險</th><th>結論</th><th>1 天後</th><th>5 天後</th></tr>' + (data.length
+    ? data.map(s => `<tr><td>${new Date(s.ts).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td title="${s.title}">${KIND[s.kind] || s.kind}</td><td>${fmt(+s.price)}</td><td>${s.risk_level || ''}</td><td class="mute" style="white-space:normal;text-align:left">${s.verdict || ''}</td><td>${r(s.ret_1d)}</td><td>${r(s.ret_5d)}</td></tr>`).join('')
+    : '<tr><td colspan="7" class="mute">還沒有推播紀錄，10/27 開盤後開始累積</td></tr>');
+}
+sb?.auth.onAuthStateChange(() => setTimeout(loadDb));
 
 // ---------- 下週觀察 ----------
 function renderWatch() {

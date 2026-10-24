@@ -32,6 +32,8 @@
 - `supabase/schema.sql` 建表（trades、budgets、ladder、rules、positions 檢視），全部開 RLS，匿名讀不到。
 - `scripts/supabase.mjs` 共用連線；`scripts/db.mjs` 在本機記成交、改分批、標記已買（金鑰在 `journal/.env`，不進 git）。
 - `alert.mjs` 有 `SUPABASE_URL` / `SUPABASE_SECRET_KEY` 時，從 `ladder`（status=active）與 `rules` 讀分批和規則，讀不到才用 `ALERT_CONFIG`。批次編號用資料庫的 seq，買完一批不會讓後面的編號往前移。
+- 第二階段：`supabase/002_signals.sql` 建 `signals`（推播紀錄，**公開可讀**，不放張數金額）。`alert.mjs` 每次正式推播寫一筆（測試模式不寫），晚間覆盤回補 `ret_1d` / `ret_5d`。
+- 儀表板：用 publishable key（可公開）讀 `signals` 顯示推播紀錄；email 登入後從 `positions` / `ladder` / `trades` 讀部位，張數改了會寫回 `ladder`。未登入時部位仍存在瀏覽器 localStorage。登入的帳號在 Supabase Auth 手動建立，已關閉自行註冊。
 - 使用者回報成交：`node scripts/db.mjs trade buy 日期 價格 張數`，再 `fill 批次`；同時更新 journal。
 
 ## 修改後如何驗證

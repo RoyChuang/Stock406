@@ -190,6 +190,38 @@ async function premarket() {
     `上次收盤 ${L.prev}（${dT.slice(5).replace('-', '/')}）｜依美股推估，僅供參考｜${clock}`,
   ].join('\n');
   await push(title, msg, 3, ['sunrise']);
+  // 預估的是「下一個台股交易日」：今天有開就是今天，休市就先記下一個平日（遇到連假會差幾天，只影響回補報酬的起點）
+  let next = new Date(tpe);
+  if (twClosed) do next = new Date(+next + 864e5); while ([0, 6].includes(next.getUTCDay()));
+  await logSignal({ trade_date: next.toISOString().slice(0, 10), kind: 'premarket', title, price: estEtf, risk: r,
+    verdict: '開盤前不判斷', batches: ladder.filter(l => estEtf <= l.p).map(l => l.n) });
+}
+
+// 推播紀錄寫進 Supabase signals（公開可讀，不含張數、均價等個人資料）；測試模式不寫，免得污染紀錄
+async function logSignal({ trade_date, kind, title, price, risk: r, verdict, batches }) {
+  if (!dbReady || process.env.ALERT_PREFIX) return;
+  try {
+    await rest('signals', { method: 'POST', body: { trade_date, symbol: '00406A', kind, title, price,
+      risk_level: r?.level, risk_score: r?.score, reasons: r?.reasons, verdict, batches } });
+  } catch (e) { console.log('推播紀錄寫入失敗：', e.message); }
+}
+
+// 晚間回補：推播後第 1、5 個交易日的收盤相對推播價格漲跌多少（盤前的起點是預估的那一天本身）
+async function backfillReturns(rows) {
+  if (!dbReady) return;
+  try {
+    const since = new Date(tpe - 20 * 864e5).toISOString().slice(0, 10);
+    const todo = await rest(`signals?symbol=eq.00406A&ret_5d=is.null&trade_date=gte.${since}&price=not.is.null`);
+    for (const s of todo) {
+      const start = rows.findIndex(r => s.kind === 'premarket' ? r.d >= s.trade_date : r.d > s.trade_date);
+      if (start < 0) continue;
+      const ret = k => rows[start + k] ? +((rows[start + k].c / s.price - 1) * 100).toFixed(3) : null;
+      const patch = { ret_1d: ret(0), ret_5d: ret(4) };
+      if (patch.ret_1d != null && (patch.ret_1d !== +s.ret_1d || patch.ret_5d != null))
+        await rest(`signals?id=eq.${s.id}`, { method: 'PATCH', body: patch });
+    }
+    console.log(`回補報酬：檢查 ${todo.length} 筆`);
+  } catch (e) { console.log('回補報酬失敗：', e.message); }
 }
 
 // 證交所三大法人買賣超（約 15:00–16:00 公布）：大盤金額（億元）與 00406A 張數
@@ -238,6 +270,8 @@ async function evening() {
     clock,
   ].join('\n');
   await push(title, msg, 3, ['crescent_moon']);
+  await logSignal({ trade_date: dT, kind: 'evening', title, price: bar.c, risk: r, verdict: '收盤總結', batches: hitToday });
+  await backfillReturns(upTo(etfD));
 }
 
 async function intraday() {
@@ -302,6 +336,9 @@ async function intraday() {
   try { const st = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (st.date === today) state = st; } catch {}
   const signals = [];
   const add = (keys, priority, title, msg) => { keys = [].concat(keys).filter(k => !state.sent.includes(k)); if (keys.length) signals.push({ keys, priority, title, msg }); };
+  // 風險等級要多抓美股資料，只在真的要推的時候算一次
+  let rk;
+  const getRisk = async () => rk ??= risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav });
   const head = `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}`;
   const metNew = bOk && cOk ? touched.filter(n => !state.sent.includes(`met${n}`)) : [];
   if (metNew.length) add(metNew.map(n => `met${n}`), 3, `✅ 符合你的第 ${metNew.join('、')} 批規則：${metNew.map(n => { const l = ladder.find(x => x.n === n); return `${l.p}（${l.label}）`; }).join('、')}`, `${head}\n${detail}`);
@@ -314,14 +351,20 @@ async function intraday() {
   // 每小時摘要（10、11、12、13 點各一則）：3 行，現價、風險、結論
   const hour = Math.floor(hm / 100);
   if ((hm >= 1000 || FORCE) && !state.sent.includes(`sum${hour}`)) {
-    const r = risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav });
+    const r = await getRisk();
     add(`sum${hour}`, 3, `⚪ ${String(hour).padStart(2, '0')}:00 00406A ${etf}（${pct(etfChg)}）｜風險 ${r.level}`, [
       `今天最低 ${dayLow}｜${ladder.map(l => `${dayLow <= l.p ? '🎯' : '⚪'}${l.n} ${l.p}`).join(' ')}`,
       `風險：${r.reasons.join('、') || '沒有明顯風險訊號'}`,
       verdict,
     ].join('\n'));
   }
-  for (const s of signals) if (await push(s.title, `${s.msg}\n${clock}`, s.priority, [s.keys[0].startsWith('met') ? 'white_check_mark' : 'chart_with_downwards_trend'])) state.sent.push(...s.keys);
+  for (const s of signals) {
+    if (!await push(s.title, `${s.msg}\n${clock}`, s.priority, [s.keys[0].startsWith('met') ? 'white_check_mark' : 'chart_with_downwards_trend'])) continue;
+    state.sent.push(...s.keys);
+    const kind = s.keys[0].replace(/\d+$/, '').replace(/^sum$/, 'summary');
+    const batches = s.keys.map(k => +(/^(?:met|touch)(\d+)$/.exec(k)?.[1])).filter(Boolean);
+    await logSignal({ trade_date: session, kind, title: s.title, price: etf, risk: await getRisk(), verdict, batches });
+  }
   if (!signals.length) console.log('沒有新訊號');
   await writeFile(STATE_FILE, JSON.stringify(state));
 }
