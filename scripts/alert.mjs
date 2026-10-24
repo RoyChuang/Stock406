@@ -1,8 +1,7 @@
 // 台股訊號推播（ntfy），由 GitHub Actions 執行：
-//   MODE=intraday（預設）盤中每 5 分鐘：依使用者的分批規則（B 止跌確認 + C 環境過濾）判斷是否符合，
-//                         另有跌破支撐、大漲大跌、急殺急拉，以及每小時摘要
-//   MODE=premarket        每個交易日 08:30：用美股收盤推估開盤跳空，對照分批價位與訊號清單
-// 推播分級（ntfy priority）：4–5 會震動，只用在「符合規則」「急殺」「轉弱警示」；2 不震動，用於資訊與摘要
+//   MODE=intraday（預設）盤中每 5 分鐘：依使用者的分批規則（B 止跌確認 + C 環境過濾）判斷，只有符合時才推（會震動）
+//   MODE=premarket        08:30（週一到週六）：用美股推估開盤，推風險等級與買點卡片（不震動）
+//   MODE=evening          22:00 / 22:45：今天收盤、法人、明天推估，推風險等級與買點卡片（不震動）
 // 環境變數：
 //   NTFY_TOPIC    ntfy 主題（放 GitHub Secret，不要寫進公開 repo）；未設定時只印出不推播
 //   ALERT_CONFIG  JSON，覆蓋下方 DEFAULTS，例如 {"ladder":["prev","bbL","lo60"]}（放 Secret）
@@ -15,10 +14,6 @@ const DEFAULTS = {
   //   "prev" 昨收、"bbL" 布林下軌、"lo20" 近 20 日低、"lo60" 近 60 日低、"pct-3" 昨收 -3%
   // 相差不到 0.5% 的價位視為同一批
   ladder: ['prev', 'bbL', 'lo60'],
-  twDownPct: -1.5,     // 加權當日跌幅達到時提醒
-  twUpPct: 1.5,        // 加權當日漲幅達到時提醒
-  fastPct: 0.7,        // 加權 15 分鐘內急殺 / 急拉幅度
-  etfDownPct: -2,      // 00406A 當日跌幅
   // 使用者的分批規則（2026-10-23 定）：每一批都要 B 且 C
   //   B 止跌確認：00406A 當日低點已經 confirmMin 分鐘沒有被跌破，或現價站上 VWAP
   //   C 環境過濾：5 項環境條件中至少 cMin 項符合
@@ -282,38 +277,19 @@ async function intraday() {
     : `⏸ 結論：依你的規則現在先不買（原因：${missAll.join('、')}）`;
   const detail = `${bOk ? '✅' : '❌'} B 跌勢暫停（下面任一項就算）\n${mark(B)}\n${cOk ? '✅' : '❌'} C 大環境 ${cCount}/${C.length} 項 OK（要 ${cfg.cMin} 項）\n${mark(C)}`;
 
-  const signals = [];
-  const add = (key, priority, title, msg) => signals.push({ key, priority, title, msg });
-  // 分批：當日曾到價、現價仍在該價位 +1% 以內才算「到價」；B 與 C 都符合才震動提醒
-  ladder.forEach(({ p, label }, i) => {
-    if (dayLow > p || etf > p * 1.01) return;
-    const name = `第 ${i + 1} 批 ${p}${label ? `（${label}）` : ''}`;
-    if (bOk && cOk) add(`met${i}`, 4, `🔴 符合你的${name}買進規則`, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}\n${detail}`);
-    else add(`touch${i}`, 2, `🟡 ${name}到價，但規則還沒符合`, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}\n${detail}`);
-  });
-  if (etf < L.bbL) add('bbL', 4, '⚠️ 00406A 跌破布林下緣', `現價 ${etf}，布林下緣 ${L.bbL.toFixed(2)}\n布林下緣是近期正常波動的底部，跌破代表跌勢比平常強`);
-  // 急殺 / 急拉以 30 分鐘為單位去重
-  const slot = Math.floor(hm / 100) * 2 + (hm % 100 >= 30 ? 1 : 0);
-  if (fast <= -cfg.fastPct) add(`fastDown${slot}`, 5, `⚠️ 大盤 15 分鐘內急跌 ${pct(fast)}`, `加權指數 ${tw.toFixed(0)}（今天 ${pct(twChg)}）`);
-  // 每小時摘要（10、11、12、13 點各一則，不震動）：3 行，現價、風險、規則狀態
-  let state = { date: today, sent: [] };
-  try { const st = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (st.date === today) state = st; } catch {}
-  const hour = Math.floor(hm / 100);
-  if ((hm >= 1000 || FORCE) && !state.sent.includes(`sum${hour}`)) {
-    const r = risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav });
-    add(`sum${hour}`, 2, `⚪ ${String(hour).padStart(2, '0')}:00 00406A ${etf}（${pct(etfChg)}）｜風險 ${r.level}`, [
-      `今天最低 ${dayLow}｜${ladder.map((l, i) => `${dayLow <= l.p ? '🎯' : '⚪'}${i + 1} ${l.p}`).join(' ')}`,
-      `風險：${r.reasons.join('、') || '沒有明顯風險訊號'}`,
-      verdict,
-    ].join('\n'));
-  }
-
   console.log(`加權 ${tw.toFixed(0)} (${pct(twChg)}) 15分 ${pct(fast)} | 00406A ${etf} (${pct(etfChg)}) 當日低 ${dayLow} VWAP ${vwap.toFixed(2)}`);
   console.log('分批價位：' + fmtLadder(ladder));
   console.log(detail);
-
-  const fresh = signals.filter(s => !state.sent.includes(s.key));
-  for (const s of fresh) if (await push(s.title, `${s.msg}\n${clock}`, s.priority, ['chart_with_downwards_trend'])) state.sent.push(s.key);
-  if (!fresh.length) console.log('沒有新訊號');
+  // 使用者要求盤中只在「符合規則」時推（震動）；到價未符合、跌破、急跌等「還在跌」的提醒都不推
+  // 同時符合多批時合併成一則；每批一天只推一次
+  let state = { date: today, sent: [] };
+  try { const st = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (st.date === today) state = st; } catch {}
+  const fresh = bOk && cOk ? touched.filter(n => !state.sent.includes(`met${n - 1}`)) : [];
+  if (fresh.length) {
+    const names = fresh.map(n => `${ladder[n - 1].p}（${ladder[n - 1].label}）`).join('、');
+    const title = `✅ 符合你的第 ${fresh.join('、')} 批規則：${names}`;
+    if (await push(title, `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}\n${detail}\n${clock}`, 4, ['white_check_mark']))
+      state.sent.push(...fresh.map(n => `met${n - 1}`));
+  } else console.log('沒有新訊號');
   await writeFile(STATE_FILE, JSON.stringify(state));
 }
