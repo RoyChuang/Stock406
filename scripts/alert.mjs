@@ -93,6 +93,24 @@ function strategyLine(L, price, volRatio, volNote = '') {
     `5 日均價 ${L.ma5.toFixed(2)}、10 日均價 ${L.ma10.toFixed(2)}：${cross}`,
   ].join('\n');
 }
+// 止跌跡象清單（盤前與晚間覆盤共用）：L.prev 是最近一個收盤價
+function stopSigns(L, vixNow, sox) {
+  const soxL = levels(sox.rows);
+  return [
+    [L.K > L.D && L.Kp <= L.Dp && L.K < 30, '短線指標 KD 在低檔翻頭向上'], [L.hist < 0 && Math.abs(L.hist) < Math.abs(L.histPrev), 'MACD 顯示下跌力道變小'],
+    [L.prev > L.ma5, `價格回到 5 日平均價 ${L.ma5.toFixed(2)} 之上`], [L.prev > L.ma20, `價格回到月平均價 ${L.ma20.toFixed(2)} 之上`],
+    [vixNow < 18, `美股恐慌指數 VIX 降到 18 以下（目前 ${vixNow.toFixed(1)}）`], [sox.px > soxL.ma5, '美國半導體股回到 5 日平均之上'],
+  ];
+}
+const fmtSigns = ok => [`止跌跡象 ${ok.filter(o => o[0]).length}/${ok.length}（✅ 越多越像跌勢要停）：`, ...ok.map(o => `${o[0] ? '✅' : '❌'} ${o[1]}`)];
+// EWT 法推估台股下一次開盤：dT 那天台股開盤前最後一個美股收盤起算，換成台幣計，扣掉台股 dT 當天已反映的部分
+function ewtGap(twRows, ewt, fx, dT) {
+  const F = byDate(fx), fxAt = d => F[d] ?? fx.rows.filter(r => r.d <= d).at(-1).c;
+  const b = [...ewt.rows].reverse().find(r => r.d < dT);
+  const ewtChg = ewt.px * fx.px / (b.c * fxAt(b.d)) - 1, twChg = twRows.at(-1).c / twRows.at(-2).c - 1;
+  return ewt.rows.at(-1).d >= dT ? (1 + ewtChg) / (1 + twChg) - 1 : 0;
+}
+const premTxt = p => p > 0 ? `貴 ${p}%` : p < 0 ? `便宜 ${-p}%` : '一樣';
 const fmtLadder = ladder => ladder.map((l, i) => `第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、');
 
 // 證交所 MIS 的 ETF 盤中預估淨值（約 15 秒更新）：e 市價、f 預估淨值、g 折溢價 %、j 時間
@@ -129,6 +147,7 @@ async function isHoliday() {
 }
 
 if (MODE === 'premarket') await premarket();
+else if (MODE === 'evening') await evening();
 else await intraday();
 
 async function premarket() {
@@ -141,23 +160,14 @@ async function premarket() {
   const upTo = d => d.rows.filter(r => r.d <= dT);
   const L = levels(upTo(etf)), twL = levels(twRows), ladder = ladderOf(L);
 
-  // EWT 法：dT 那天台股開盤前最後一個美股收盤起算，換成台幣計，扣掉台股 dT 當天已反映的部分
-  const F = byDate(fx), fxAt = d => F[d] ?? fx.rows.filter(r => r.d <= d).at(-1).c;
-  const b = [...ewt.rows].reverse().find(r => r.d < dT);
-  const ewtChg = ewt.px * fx.px / (b.c * fxAt(b.d)) - 1, twChg = twRows.at(-1).c / twRows.at(-2).c - 1;
-  const gap = ewt.rows.at(-1).d >= dT ? (1 + ewtChg) / (1 + twChg) - 1 : 0;
+  const gap = ewtGap(twRows, ewt, fx, dT), F = byDate(fx);
   // ADR 法：20 日平均溢價推算台積電
   const A = byDate(adr), hist = upTo(t2330).filter(r => A[r.d] && F[r.d]).map(r => A[r.d] * F[r.d] / 5 / r.c - 1).slice(-20);
   const base = hist.reduce((a, v) => a + v, 0) / hist.length, adrGap = adr.px * fx.px / 5 / (1 + base) / upTo(t2330).at(-1).c - 1;
 
   const estTw = twRows.at(-1).c * (1 + gap), estEtf = +(L.prev * (1 + gap)).toFixed(2);
   const hits = ladder.map((l, i) => `${estEtf <= l.p ? '🎯' : '⚪'} 第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`);
-  const vixNow = vix.px, soxL = levels(sox.rows);
-  const ok = [
-    [L.K > L.D && L.Kp <= L.Dp && L.K < 30, '短線指標 KD 在低檔翻頭向上'], [L.hist < 0 && Math.abs(L.hist) < Math.abs(L.histPrev), 'MACD 顯示下跌力道變小'],
-    [L.prev > L.ma5, `價格回到 5 日平均價 ${L.ma5.toFixed(2)} 之上`], [L.prev > L.ma20, `價格回到月平均價 ${L.ma20.toFixed(2)} 之上`],
-    [vixNow < 18, `美股恐慌指數 VIX 降到 18 以下（目前 ${vixNow.toFixed(1)}）`], [sox.px > soxL.ma5, '美國半導體股回到 5 日平均之上'],
-  ];
+  const vixNow = vix.px, ok = stopSigns(L, vixNow, sox);
   const warn = [
     [estEtf < L.bbL, `預估開盤會跌破布林下緣 ${L.bbL.toFixed(2)}（近期正常波動的底部）`],
     [twL.ma120 && estTw < twL.ma120, `預估大盤會跌破半年平均 ${twL.ma120?.toFixed(0)}`],
@@ -166,7 +176,6 @@ async function premarket() {
 
   const md = dT.slice(5).replace('-', '/');
   const title = `盤前：預估大盤 ${pct(gap * 100)}，00406A 約 ${estEtf}`;
-  const premTxt = p => p > 0 ? `貴 ${p}%` : p < 0 ? `便宜 ${-p}%` : '一樣';
   const msg = [
     `用美股推估台股開盤：`,
     `大盤（加權指數）約 ${estTw.toFixed(0)}（${pct(gap * 100)}）`,
@@ -177,7 +186,7 @@ async function premarket() {
     `你的分批價位（🎯 預估開盤會跌到、⚪ 不會）：`, ...hits,
     `🎯 的價位如果掛了買單，開盤就可能直接用開盤價買到。`,
     ``,
-    `止跌跡象 ${ok.filter(o => o[0]).length}/${ok.length}（✅ 越多越像跌勢要停）：`, ...ok.map(o => `${o[0] ? '✅' : '❌'} ${o[1]}`),
+    ...fmtSigns(ok),
     warn.length ? `⚠️ 要小心：\n${warn.map(w => `　└ ${w[1]}`).join('\n')}` : '⚠️ 要小心：無',
     ``,
     strategyLine(L, L.prev, L.vLast / L.v5, `（${md}）`),
@@ -187,6 +196,82 @@ async function premarket() {
     `以上是用美股推算的粗估，僅供參考。${clock}`,
   ].join('\n');
   await push(title, msg, 3, ['sunrise']);
+}
+
+// 證交所三大法人買賣超（約 15:00–16:00 公布）：大盤金額（億元）與 00406A 張數
+async function institutions(d) {
+  const ymd = d.replace(/-/g, ''), num = s => +String(s).replace(/,/g, '');
+  try {
+    const [b, t] = await Promise.all([
+      fetch(`https://www.twse.com.tw/rwd/zh/fund/BFI82U?dayDate=${ymd}&type=day&response=json`).then(r => r.json()),
+      fetch(`https://www.twse.com.tw/rwd/zh/fund/T86?date=${ymd}&selectType=0099P&response=json`).then(r => r.json())]);
+    if (b.stat !== 'OK') return null;
+    const v = name => b.data.filter(r => r[0].startsWith(name)).reduce((s, r) => s + num(r[3]), 0) / 1e8;
+    const e = t.stat === 'OK' && t.data.find(r => r[0].trim() === '00406A');
+    return { mkt: { f: v('外資'), i: v('投信'), d: v('自營商') },
+      etf: e && { f: (num(e[4]) + num(e[7])) / 1000, i: num(e[10]) / 1000, d: num(e[11]) / 1000 } };
+  } catch (e) { console.log('法人資料讀取失敗', e.message); return null; }
+}
+
+// 晚間覆盤（台北 22:00）：今天台股收盤總結 + 法人 + 分批是否跌到 + 美股開盤後的走勢與明天推估
+async function evening() {
+  const [etfD, twD, tsmD, ewt, fx, vix, sox, gspc, ixic, nq, es] = await Promise.all([
+    chart('00406A.TW', '6mo', '1d'), chart('^TWII', '1y', '1d'), chart('2330.TW', '1mo', '1d'), chart('EWT', '1y', '1d'), chart('TWD=X', '1y', '1d'),
+    chart('^VIX', '5d', '1d'), chart('^SOX', '1y', '1d'), chart('^GSPC', '1d', '5m'), chart('^IXIC', '1d', '5m'), chart('NQ=F', '1d', '5m'), chart('ES=F', '1d', '5m')]);
+  // 台股最後一個交易日；正式執行時必須是今天，否則代表今天休市
+  const dT = twD.rows.at(-1).d;
+  if (!FORCE && dT !== today) { console.log('今天台股沒開盤，略過'); return; }
+  const upTo = d => d.rows.filter(r => r.d <= dT), before = d => d.rows.filter(r => r.d < dT);
+  const etfRows = upTo(etfD), bar = etfRows.at(-1), Lb = levels(before(etfD)), L = levels(etfRows), ladder = ladderOf(Lb);
+  const twRows = upTo(twD), twL = levels(twRows), tw = twRows.at(-1).c, twChg = (tw / twRows.at(-2).c - 1) * 100;
+  const tsmRows = upTo(tsmD), tsmChg = (tsmRows.at(-1).c / tsmRows.at(-2).c - 1) * 100;
+  const etfChg = (bar.c / Lb.prev - 1) * 100, md = dT.slice(5).replace('-', '/');
+  const [nav, inst] = await Promise.all([inav('00406A'), institutions(dT)]);
+  const sg = x => (x >= 0 ? '+' : '') + Math.round(x).toLocaleString('en-US');
+
+  const warn = [
+    [bar.c < L.bbL, `00406A 收盤跌破布林下緣 ${L.bbL.toFixed(2)}（近期正常波動的底部）`],
+    [twL.ma120 && tw < twL.ma120, `大盤收盤跌破半年平均 ${twL.ma120?.toFixed(0)}`],
+    [vix.px > 25, `VIX 超過 25，市場很恐慌（${vix.px.toFixed(1)}）`],
+  ].filter(w => w[0]);
+
+  // 美股是否已開盤：用 S&P 500 當天的正常交易時段判斷
+  const reg = gspc.meta.currentTradingPeriod?.regular, now = Date.now() / 1000;
+  const usOpen = reg && now >= reg.start && now <= reg.end;
+  const hhmm = t => new Date((t + 8 * 3600) * 1000).toISOString().slice(11, 16);
+  const dayChg = d => (d.px / d.meta.chartPreviousClose - 1) * 100;
+  const gap = ewt.rows.at(-1).d >= dT ? ewtGap(twRows, ewt, fx, dT) : null;
+
+  const title = `🌙 今日覆盤：00406A 收 ${bar.c.toFixed(2)}（${pct(etfChg)}），大盤 ${pct(twChg)}`;
+  const msg = [
+    `【今天台股 ${md}】`,
+    `00406A 收盤 ${bar.c.toFixed(2)}（${pct(etfChg)}）｜最高 ${bar.h.toFixed(2)}｜最低 ${bar.l.toFixed(2)}`,
+    nav && nav.date === dT.replace(/-/g, '') ? `收盤時市價比基金實際價值（淨值 ${nav.nav}）${premTxt(nav.prem)}` : '收盤時市價與淨值比較：讀取失敗',
+    `大盤（加權指數）${tw.toFixed(0)}（${pct(twChg)}）｜台積電 ${tsmRows.at(-1).c.toFixed(0)}（${pct(tsmChg)}）`,
+    inst ? [
+      `法人買賣（正數＝買進比賣出多）：`,
+      `　└ 整個台股：外資 ${sg(inst.mkt.f)} 億、投信 ${sg(inst.mkt.i)} 億、自營商 ${sg(inst.mkt.d)} 億`,
+      inst.etf ? `　└ 00406A：外資 ${sg(inst.etf.f)} 張、投信 ${sg(inst.etf.i)} 張、自營商 ${sg(inst.etf.d)} 張（自營商多半是 ETF 造市商在調節，參考就好）` : '　└ 00406A：沒有資料',
+    ].join('\n') : '法人買賣：還沒公布或讀取失敗',
+    ``,
+    `你的分批價位今天（🎯 有跌到、⚪ 沒有）：`,
+    ...ladder.map((l, i) => `${bar.l <= l.p ? '🎯' : '⚪'} 第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`),
+    ``,
+    ...fmtSigns(stopSigns(L, vix.px, sox)),
+    warn.length ? `⚠️ 要小心：\n${warn.map(w => `　└ ${w[1]}`).join('\n')}` : '⚠️ 要小心：無',
+    ``,
+    strategyLine(L, bar.c, L.vLast / L.v5, `（${md}）`),
+    ``,
+    `【美股現在】`,
+    usOpen ? `S&P 500 ${pct(dayChg(gspc))}｜Nasdaq ${pct(dayChg(ixic))}｜美國半導體 ${pct((sox.px / sox.rows.at(-2).c - 1) * 100)}`
+      : `${reg && now < reg.start ? `美股還沒開盤（台北時間 ${hhmm(reg.start)} 開盤）` : '美股目前沒有交易'}，先看期貨：`,
+    `美股期貨：Nasdaq ${pct(dayChg(nq))}｜S&P ${pct(dayChg(es))}`,
+    `美股恐慌指數 VIX ${vix.px.toFixed(1)}（<18 平靜、>25 恐慌）｜1 美元 = ${fx.px.toFixed(3)} 台幣`,
+    gap != null ? `照目前美股推估，台股下次開盤約 ${pct(gap * 100)}（00406A 約 ${(bar.c * (1 + gap)).toFixed(2)}）${usOpen ? '\n　└ 美股還沒收盤，數字還會變，明早 8:30 會再推估一次' : ''}`
+      : '明早 8:30 會用美股收盤推估台股開盤。',
+    clock,
+  ].join('\n');
+  await push(title, msg, 2, ['crescent_moon']);
 }
 
 async function intraday() {
