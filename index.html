@@ -137,7 +137,7 @@ section{display:none}section.on{display:block}
 
 <section data-tab="bt">
   <div class="panel">
-    <h2>回測：碰到支撐＋止跌跡象，之後會漲嗎？</h2>
+    <h2>回測：碰到支撐＋止跌跡象，之後會漲嗎？怎麼分批比較好？</h2>
     <div id="bt"></div>
   </div>
 </section>
@@ -692,6 +692,23 @@ function renderYield() {
     <div class="mute" style="font-size:12px">殖利率＝一年配息 ÷ 買進價，越高代表同樣的配息買得越便宜。00406A 的配息率比一般高股息 ETF 高很多，可能包含本金或資本利得，不保證每個月都配這麼多；配息減少時殖利率會跟著下降。</div>`;
 }
 
+// 分批方式比較的白話結論與表格
+function plansHtml(P, pc) {
+  if (!P) return '<h2 style="margin-top:18px">分批方式比較</h2><div class="mute">這檔的歷史太短（要超過一年半），請切換到其他幾檔看。</div>';
+  const R = P.rows, by = (k, dir) => [...R].sort((a, b) => dir * (a[k] - b[k]))[0], best = by('ret', -1), low = by('cost', 1), safe = by('worst', -1);
+  const spread = by('ret', -1).ret - by('ret', 1).ret, lines = [
+    `一年後報酬最好的是「${best.label}」${pc(best.ret)}，最好和最差只差 ${fmt(spread, 1)} 個百分點${spread < 3 ? '，<b>各種方式差別不大</b>' : ''}。`,
+    `買進成本最低的是「${low.label}」（比開始那天 ${pc(low.cost)}），但平均只買到 ${low.dep}%，沒買到的錢沒有跟著賺。`,
+    `過程中帳面虧最少的是「${safe.label}」（平均最慘 ${pc(safe.worst)}）。`,
+  ];
+  return `<h2 style="margin-top:18px">分批方式比較（${P.starts} 次模擬，${P.from.slice(0, 7)} ～ ${P.to.slice(0, 7)} 每個月開始一次）</h2>
+    <ul style="margin:8px 0;padding-left:18px">${lines.map(l => `<li>${l}</li>`).join('')}</ul>
+    <div class="tblwrap"><table><tr><th>方式</th><th>平均買進成本<br>（比開始那天）</th><th>6 個月內<br>買到</th><th>過程中<br>平均最慘</th><th>最慘的<br>一次</th><th>一年後<br>報酬</th><th>贏過<br>定期定額</th></tr>
+    ${R.map(g => `<tr><td style="text-align:left">${g.label}</td><td>${pc(g.cost)}</td><td>${g.dep}%</td><td>${pc(g.worst)}</td><td>${pc(g.worstMin)}</td><td>${pc(g.ret)}</td><td>${g.win == null ? '—' : g.win + '%'}</td></tr>`).join('')}
+    </table></div>
+    <div class="mute" style="font-size:12px;margin-top:6px">每次模擬拿同一筆錢，在 6 個月內照各種方式投入，看 1 年後的結果（沒買到的現金不算利息）。依支撐的三個價位每天用前一天以前的日 K 重算：上次收盤價、布林下緣、近 3 個月最低，金額 1:2:3；跌到價位就成交。「等止跌跡象」＝碰到價位之後，等到哪天止跌跡象 ≥ 2、收盤還在價位 3% 以內才買。報酬用還原配息的股價計算。</div>`;
+}
+
 // ---------- 回測（data/backtest.json，GitHub Actions 每次更新資料時重算） ----------
 let BT = null, btSel = null;
 async function renderBacktest() {
@@ -715,9 +732,10 @@ async function renderBacktest() {
     <div class="tblwrap"><table><tr><th>情況</th><th>次數</th><th>1 天後平均</th><th>1 天後上漲機率</th><th>5 天後平均</th><th>5 天後上漲機率</th><th>5 天後最差</th></tr>
     ${r.groups.map(g => `<tr${g.k === 'all' ? ' class="mute"' : ''}><td style="text-align:left">${g.label}${few(g.n)}</td><td>${g.n}</td><td>${pc(g.r1)}</td><td>${g.win1 ?? '—'}%</td><td>${pc(g.r5)}</td><td>${g.win5 ?? '—'}%</td><td>${pc(g.worst5)}</td></tr>`).join('')}
     </table></div>
-    ${r.recent?.length ? `<h2 style="margin-top:14px">最近幾次碰到支撐</h2><div class="tblwrap"><table><tr><th>日期</th><th>收盤</th><th>支撐</th><th>止跌跡象</th><th>1 天後</th><th>5 天後</th></tr>
+    ${plansHtml(r.plans, pc)}
+    ${r.recent?.length ? `<h2 style="margin-top:18px">最近幾次碰到支撐</h2><div class="tblwrap"><table><tr><th>日期</th><th>收盤</th><th>支撐</th><th>止跌跡象</th><th>1 天後</th><th>5 天後</th></tr>
     ${r.recent.map(e => `<tr><td>${e.d}</td><td>${fmt(e.c)}</td><td>${fmt(e.sup)}</td><td>${e.signs} / 3</td><td>${pc(e.r1)}</td><td>${pc(e.r5)}</td></tr>`).join('')}</table></div>` : ''}
-    <div class="mute" style="font-size:12px;margin-top:8px">做法：每一天只用那天以前的資料判斷，用當天收盤價當作買進價，看之後第 1、5 個交易日收盤的漲跌。「碰到支撐」＝當天最低價跌到支撐上方 1% 以內、收盤沒有跌破 2% 以上；同一種情況 5 天內只算第一次。00406A 上市時間短，所以一起看加權指數和兩檔類似的高股息 ETF。過去的結果不代表未來，也沒有算手續費和配息。</div>`;
+    <div class="mute" style="font-size:12px;margin-top:8px">做法：每一天只用那天以前的資料判斷，用當天收盤價當作買進價，看之後第 1、5 個交易日收盤的漲跌。「碰到支撐」＝當天最低價跌到支撐上方 1% 以內、收盤沒有跌破 2% 以上；同一種情況 5 天內只算第一次。00406A 上市時間短，所以一起看加權指數和兩檔類似的高股息 ETF。過去的結果不代表未來；上面的漲跌沒有算手續費和配息。</div>`;
   $('bt').querySelectorAll('button[data-i]').forEach(b => b.onclick = () => { btSel = +b.dataset.i; renderBacktest(); });
 }
 

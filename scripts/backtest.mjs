@@ -24,7 +24,9 @@ async function daily(symbol, years) {
   const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!r.ok) throw new Error(`${symbol} HTTP ${r.status}`);
   const res = (await r.json()).chart.result[0], q = res.indicators.quote[0], off = res.meta.gmtoffset || 0;
-  const rows = res.timestamp.map((t, i) => ({ d: new Date((t + off) * 1000).toISOString().slice(0, 10), c: q.close[i], h: q.high[i], l: q.low[i], v: q.volume?.[i] || 0 }))
+  // a：還原配息後的收盤價（算報酬用，除息不算下跌）
+  const adj = res.indicators.adjclose?.[0]?.adjclose || [];
+  const rows = res.timestamp.map((t, i) => ({ d: new Date((t + off) * 1000).toISOString().slice(0, 10), o: q.open[i], c: q.close[i], h: q.high[i], l: q.low[i], v: q.volume?.[i] || 0, a: adj[i] ?? q.close[i] }))
     // 休市日（例如颱風假）Yahoo 會補一根成交量 0、開高低收都一樣的假 K 棒，要拿掉
     .filter(r => r.c != null && r.h != null && r.l != null && !(r.v === 0 && r.h === r.l));
   // 配息紀錄（除息日、每單位金額），殖利率用
@@ -94,11 +96,75 @@ function backtest(rows) {
   return { groups: GROUPS.map(([k, label]) => ({ k, label, ...stat(ev[k]) })), recent: [...ev.sup].reverse().slice(0, 8) };
 }
 
+// ---------- 分批方式比較 ----------
+// 從每個月初開始一輪：同一筆錢（當作 1），6 個月（126 個交易日）內投入，看到 1 年（252 個交易日）後的結果
+// 價位和止跌跡象用原始股價判斷（和看盤時一樣）；張數和報酬用還原配息的股價算（除息不算下跌）
+// 依支撐的價位每天用「當天以前」的日 K 重算：上次收盤價、布林下緣、近 3 個月最低，張數 1:2:3
+const PLANS = [
+  ['dca', '定期定額（每月一次，6 個月）'],
+  ['lad-all', '依支撐 1:2:3（6 個月沒買到的補買）'],
+  ['lad-cash', '依支撐 1:2:3（沒買到的留現金）'],
+  ['ladS-all', '依支撐 1:2:3＋等止跌跡象（沒買到的補買）'],
+  ['ladS-cash', '依支撐 1:2:3＋等止跌跡象（沒買到的留現金）'],
+];
+function plans(rows) {
+  const x = series(rows), n = rows.length, W = [1 / 6, 2 / 6, 3 / 6], DEP = 126, HOLD = 252;
+  if (n < 60 + HOLD + 1) return null;
+  const f = rows.map(r => r.a / r.c);
+  const levels = t => {
+    const c = x.c.slice(t - 20, t), m = c.reduce((a, b) => a + b, 0) / 20, sd = Math.sqrt(c.reduce((s, v) => s + (v - m) ** 2, 0) / 20);
+    return [x.c[t - 1], m - 2 * sd, Math.min(...rows.slice(t - 60, t).map(r => r.l))];
+  };
+  const signs = t => [x.K[t] > x.D[t] && x.K[t] < 30, x.hist[t] < 0 && Math.abs(x.hist[t]) < Math.abs(x.hist[t - 1]), x.c[t] > x.ma5[t]].filter(Boolean).length;
+  const runs = Object.fromEntries(PLANS.map(([k]) => [k, []]));
+  let starts = 0;
+  for (let s = 60; s + HOLD < n; s += 21, starts++) {
+    for (const [k] of PLANS) {
+      const [plan, rest] = k.split('-');
+      let cash = 1, units = 0, worst = 0, dep = 0;
+      const done = [false, false, false], armed = [null, null, null];
+      const buy = (t, p, amt) => { units += amt / (p * f[t]); cash -= amt; };
+      for (let t = s; t <= s + HOLD; t++) {
+        if (t < s + DEP) {
+          if (plan === 'dca') { if ((t - s) % 21 === 0) buy(t, x.c[t], 1 / 6); }
+          else {
+            const L = levels(t), sg = plan === 'ladS' ? signs(t) : 0;
+            L.forEach((lv, i) => {
+              if (done[i]) return;
+              // 掛單：當天最低價跌到價位就成交；開盤就跳空低於價位的話用開盤價成交
+              if (plan === 'lad' && rows[t].l <= lv) { buy(t, Math.min(lv, rows[t].o), W[i]); done[i] = true; }
+              // 等止跌：先碰到價位，之後哪天止跌跡象 ≥ 2、收盤還在價位 3% 以內，用收盤價買
+              if (plan === 'ladS') {
+                if (armed[i] == null && rows[t].l <= lv) armed[i] = lv;
+                if (armed[i] != null && sg >= 2 && x.c[t] <= armed[i] * 1.03) { buy(t, x.c[t], W[i]); done[i] = true; }
+              }
+            });
+          }
+        } else if (t === s + DEP) {
+          dep = 1 - cash;
+          if (rest === 'all' && cash > 1e-9) buy(t, x.c[t], cash);
+        }
+        worst = Math.min(worst, cash + units * rows[t].a - 1);
+      }
+      runs[k].push({ cost: units ? ((1 - cash) / units / rows[s].a - 1) * 100 : null, dep: plan === 'dca' ? 1 : dep, worst: worst * 100, ret: (cash + units * rows[s + HOLD].a - 1) * 100 });
+    }
+  }
+  const avg = a => +(a.reduce((v, b) => v + b, 0) / a.length).toFixed(2);
+  return {
+    starts, from: rows[60].d, to: rows[n - HOLD - 1].d,
+    rows: PLANS.map(([k, label]) => {
+      const r = runs[k], c = r.filter(e => e.cost != null);
+      return { k, label, cost: c.length ? avg(c.map(e => e.cost)) : null, dep: Math.round(avg(r.map(e => e.dep)) * 100), worst: avg(r.map(e => e.worst)), worstMin: +Math.min(...r.map(e => e.worst)).toFixed(2),
+        ret: avg(r.map(e => e.ret)), win: k === 'dca' ? null : Math.round(r.filter((e, i) => e.ret > runs.dca[i].ret).length / r.length * 100) };
+    }),
+  };
+}
+
 const out = { t: new Date().toISOString(), syms: [] };
 for (const [s, name, years] of SYMS) {
   try {
     const rows = await daily(s, years);
-    out.syms.push({ s, name, from: rows[0].d, to: rows.at(-1).d, days: rows.length, yld: yieldInfo(rows, rows.divs), ...backtest(rows) });
+    out.syms.push({ s, name, from: rows[0].d, to: rows.at(-1).d, days: rows.length, yld: yieldInfo(rows, rows.divs), plans: plans(rows), ...backtest(rows) });
     console.log('ok', s, rows.length);
   } catch (e) {
     console.error('fail', s, e.message);
