@@ -59,7 +59,7 @@ section{display:none}section.on{display:block}
   <div><span id="status" class="mute">載入中…</span> <button id="refresh">重新整理</button>
   <label class="mute"><input type="checkbox" id="auto" checked> 每 60 秒更新</label></div>
   <nav class="tabs" id="tabs">
-    <button data-t="home">總覽</button><button data-t="market">行情</button><button data-t="pos">我的部位</button><button data-t="sig">推播紀錄</button><button data-t="learn">觀察與策略</button>
+    <button data-t="home">總覽</button><button data-t="market">行情</button><button data-t="pos">我的部位</button><button data-t="sig">推播紀錄</button><button data-t="bt">回測</button><button data-t="learn">觀察與策略</button>
   </nav>
 </header>
 <main>
@@ -131,6 +131,13 @@ section{display:none}section.on{display:block}
     <h2>推播紀錄（00406A）</h2>
     <div class="tblwrap"><table id="sigTbl"></table></div>
     <div class="legend">每次推播的價格、風險等級和依規則的結論。「1 天後 / 5 天後」是之後第 1、5 個交易日收盤相對推播價格的漲跌，每晚自動回補，用來檢討規則準不準。這裡沒有任何張數或金額。</div>
+  </div>
+</section>
+
+<section data-tab="bt">
+  <div class="panel">
+    <h2>回測：碰到支撐＋止跌跡象，之後會漲嗎？</h2>
+    <div id="bt"></div>
   </div>
 </section>
 
@@ -255,7 +262,7 @@ async function refreshAll() {
   $('status').textContent = '更新中…';
   const out = await Promise.allSettled(SYMBOLS.map(x => load(x.s)));
   out.forEach((o, i) => { if (o.status === 'fulfilled') DATA[SYMBOLS[i].s] = o.value; else DATA[SYMBOLS[i].s] = { error: String(o.reason) }; });
-  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview();
+  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview(); renderBacktest();
   let src = '即時';
   if (!LIVE) {
     try { const u = await (await fetch(`data/updated.json?t=${Date.now()}`, { cache: 'no-store' })).json(); src = '資料抓取於 ' + new Date(u.t).toLocaleString('zh-TW'); } catch {}
@@ -665,8 +672,36 @@ async function renderOverview() {
   $('ovSig').innerHTML = `<div class="mute">${t(s.ts)} · ${KIND[s.kind] || s.kind}</div><div><b>${s.title}</b></div>${s.verdict ? `<div style="margin-top:4px">${s.verdict}</div>` : ''}`;
 }
 
+// ---------- 回測（data/backtest.json，GitHub Actions 每次更新資料時重算） ----------
+let BT = null, btSel = null;
+async function renderBacktest() {
+  try { BT = await (await fetch(`data/backtest.json?t=${Date.now()}`, { cache: 'no-store' })).json(); } catch { BT = null; }
+  if (!BT?.syms?.length) { $('bt').innerHTML = '<span class="mute">回測結果還沒產生（每次 GitHub 更新資料時會重算）</span>'; return; }
+  // 預設先看 0056：和 00406A 同樣是高股息 ETF、歷史夠長
+  if (btSel == null) btSel = Math.max(0, BT.syms.findIndex(x => x.s === '0056.TW'));
+  const r = BT.syms[btSel] || BT.syms[0], G = Object.fromEntries(r.groups.map(g => [g.k, g]));
+  const pc = v => v == null ? '<span class="mute">—</span>' : `<span class="${cls(v)}">${sgn(v)}%</span>`;
+  const few = n => n < 30 ? ' <span class="warn" title="次數太少，結果不太可靠">⚠ 次數少</span>' : '';
+  // 白話結論：和「所有交易日」比較
+  const a = G.all, s0 = G.sup0, s2 = G.sup2, lines = [];
+  if (s0?.n >= 10) lines.push(`碰到支撐但<b>還沒有止跌跡象</b>時，隔天平均 ${pc(s0.r1)}、上漲機率 ${s0.win1}%（平常是 ${pc(a.r1)}、${a.win1}%）${s0.r1 < a.r1 ? '，<b>比平常差</b>，代表「到價先別急，等止跌跡象」有道理' : '，沒有比平常差'}。`);
+  if (s2?.n >= 10) lines.push(`碰到支撐<b>而且止跌跡象 ≥ 2</b> 時，5 天後上漲機率 ${s2.win5}%（平常 ${a.win5}%），5 天後最差的一次 ${pc(s2.worst5)}（平常最差 ${pc(a.worst5)}）${s2.worst5 > a.worst5 ? '，<b>大跌的風險比較小</b>' : ''}${s2.r5 <= a.r5 ? '；但平均漲幅沒有比較好，<b>不是穩賺訊號</b>' : ''}。`);
+  if (!lines.length) lines.push('這檔的歷史資料太短，訊號次數太少，先看其他幾檔的結果。');
+  $('bt').innerHTML = `
+    <div class="tabs" style="margin:0 0 10px">${BT.syms.map((x, i) => `<button data-i="${i}" class="${i === btSel ? 'on' : ''}">${x.name.split('（')[0]}</button>`).join('')}</div>
+    <div class="mute" style="font-size:12px">${r.name}｜${r.from} ～ ${r.to}，${r.days} 個交易日</div>
+    <ul style="margin:8px 0;padding-left:18px">${lines.map(l => `<li>${l}</li>`).join('')}</ul>
+    <div class="tblwrap"><table><tr><th>情況</th><th>次數</th><th>1 天後平均</th><th>1 天後上漲機率</th><th>5 天後平均</th><th>5 天後上漲機率</th><th>5 天後最差</th></tr>
+    ${r.groups.map(g => `<tr${g.k === 'all' ? ' class="mute"' : ''}><td style="text-align:left">${g.label}${few(g.n)}</td><td>${g.n}</td><td>${pc(g.r1)}</td><td>${g.win1 ?? '—'}%</td><td>${pc(g.r5)}</td><td>${g.win5 ?? '—'}%</td><td>${pc(g.worst5)}</td></tr>`).join('')}
+    </table></div>
+    ${r.recent?.length ? `<h2 style="margin-top:14px">最近幾次碰到支撐</h2><div class="tblwrap"><table><tr><th>日期</th><th>收盤</th><th>支撐</th><th>止跌跡象</th><th>1 天後</th><th>5 天後</th></tr>
+    ${r.recent.map(e => `<tr><td>${e.d}</td><td>${fmt(e.c)}</td><td>${fmt(e.sup)}</td><td>${e.signs} / 3</td><td>${pc(e.r1)}</td><td>${pc(e.r5)}</td></tr>`).join('')}</table></div>` : ''}
+    <div class="mute" style="font-size:12px;margin-top:8px">做法：每一天只用那天以前的資料判斷，用當天收盤價當作買進價，看之後第 1、5 個交易日收盤的漲跌。「碰到支撐」＝當天最低價跌到支撐上方 1% 以內、收盤沒有跌破 2% 以上；同一種情況 5 天內只算第一次。00406A 上市時間短，所以一起看加權指數和兩檔類似的高股息 ETF。過去的結果不代表未來，也沒有算手續費和配息。</div>`;
+  $('bt').querySelectorAll('button[data-i]').forEach(b => b.onclick = () => { btSel = +b.dataset.i; renderBacktest(); });
+}
+
 // ---------- 分頁 ----------
-const TABS = ['home', 'market', 'pos', 'sig', 'learn'];
+const TABS = ['home', 'market', 'pos', 'sig', 'bt', 'learn'];
 function showTab(t) {
   if (!TABS.includes(t)) t = 'home';
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
