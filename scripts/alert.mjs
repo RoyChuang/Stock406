@@ -21,6 +21,7 @@ const DEFAULTS = {
   confirmMin: 15,
   cMin: 3,
 };
+let ladderSrc = 'ALERT_CONFIG';
 const cfg = { ...DEFAULTS, ...JSON.parse(process.env.ALERT_CONFIG || '{}') };
 // 有設定 Supabase 時，分批與規則改從資料庫讀（買完的批次標成 filled 就自動不看）；讀不到才用 ALERT_CONFIG
 if (dbReady) {
@@ -28,7 +29,8 @@ if (dbReady) {
     const [lad, rul] = await Promise.all([rest('ladder?symbol=eq.00406A&order=seq'), rest('rules?symbol=eq.00406A')]);
     if (lad.length) cfg.ladder = lad.filter(r => r.status === 'active').map(r => ({ n: r.seq, level: r.level }));
     if (rul[0]) Object.assign(cfg, { confirmMin: rul[0].confirm_min, cMin: rul[0].c_min });
-    console.log('分批與規則來自 Supabase');
+    if (lad.length) ladderSrc = 'Supabase';
+    console.log(`分批與規則來自 ${ladderSrc}`);
   } catch (e) { console.log('Supabase 讀取失敗，改用 ALERT_CONFIG：', e.message); }
 }
 const MODE = process.env.MODE || 'intraday', FORCE = !!process.env.FORCE;
@@ -139,6 +141,8 @@ async function inav(code) {
 }
 
 async function push(title, message, priority, tags) {
+  // 測試模式在最後註明分批來源，方便確認 Actions 有讀到資料庫
+  if (process.env.ALERT_PREFIX) message += `\n（測試：分批來源 ${ladderSrc}）`;
   console.log(`推播：${title}\n${message}\n`);
   if (!TOPIC) return true;
   const r = await fetch('https://ntfy.sh/', {
