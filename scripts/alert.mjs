@@ -106,7 +106,9 @@ async function push(title, message, priority, tags) {
   if (!TOPIC) return true;
   const r = await fetch('https://ntfy.sh/', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic: TOPIC, title: (process.env.ALERT_PREFIX || '') + title, message, priority, tags, click: 'https://roychuang.github.io/Stock406/' }),
+    body: JSON.stringify({ topic: TOPIC, title: (process.env.ALERT_PREFIX || '') + title, message, priority, tags,
+      // 不設 click：點通知會在 ntfy App 內展開全文；儀表板改成按鈕
+      actions: [{ action: 'view', label: '儀表板', url: 'https://roychuang.github.io/Stock406/', clear: false }] }),
   });
   if (!r.ok) console.error('推播失敗', r.status, await r.text());
   return r.ok;
