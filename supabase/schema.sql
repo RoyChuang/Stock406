@@ -67,6 +67,11 @@ from public.trades t
 left join public.budgets b on b.user_id = t.user_id and b.symbol = t.symbol
 group by t.user_id, t.symbol, b.total;
 
+-- 建專案時關掉了「Automatically expose new tables」，所以要自己開權限：只給登入的人（authenticated）和 Actions（service_role），不給匿名（anon）
+grant select, insert, update, delete on public.trades, public.budgets, public.ladder, public.rules to authenticated, service_role;
+grant select on public.positions to authenticated, service_role;
+revoke all on public.trades, public.budgets, public.ladder, public.rules, public.positions from anon;
+
 -- RLS：只能看、改自己的資料
 alter table public.trades  enable row level security;
 alter table public.budgets enable row level security;
