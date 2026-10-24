@@ -54,7 +54,12 @@ function levels(rows) {
     const w = rows.slice(i - 8, i + 1), hh = Math.max(...w.map(r => r.h)), ll = Math.min(...w.map(r => r.l));
     Kp = K; Dp = D; K = K * 2 / 3 + (hh === ll ? 50 : (c[i] - ll) / (hh - ll) * 100) / 3; D = D * 2 / 3 + K / 3;
   }
-  return { prev, ma5: sma(c, 5), ma20, ma120: c.length >= 120 ? sma(c, 120) : null, bbL: ma20 - 2 * sd,
+  // 借自 daily_stock_analysis 策略的價量指標：MA5/MA10 交叉、量比、量能冷熱
+  const v = rows.map(r => r.v), ma5At = k => sma(c.slice(0, c.length - k), 5), ma10At = k => sma(c.slice(0, c.length - k), 10);
+  const above = [3, 2, 1, 0].map(k => ma5At(k) > ma10At(k));
+  const cross = above.slice(1).some((a, i) => a && !above[i]) && above[3] ? 'golden' : above.slice(1).some((a, i) => !a && above[i]) && !above[3] ? 'dead' : null;
+  return { prev, ma5: sma(c, 5), ma10: sma(c, 10), ma20, ma120: c.length >= 120 ? sma(c, 120) : null, bbL: ma20 - 2 * sd,
+    cross, vLast: v.at(-1), v5: sma(v.slice(0, -1), 5), heat: sma(v, 5) / sma(v, 60),
     lo20: Math.min(...rows.slice(-20).map(r => r.l)), lo60: Math.min(...rows.slice(-60).map(r => r.l)),
     hist: hist.at(-1), histPrev: hist.at(-2), K, D, Kp, Dp };
 }
@@ -73,6 +78,17 @@ function ladderOf(L) {
     if (!out.some(o => Math.abs(o.p - lv.p) / o.p < 0.005)) out.push(lv);
   }
   return out;
+}
+// 策略指標一行摘要（只當資訊）：price 為現價，volRatio 為量比（盤中是當日累計量對前 5 日均量）
+function strategyLine(L, price, volRatio, volNote = '') {
+  const bias = (price / L.ma5 - 1) * 100;
+  const heat = L.heat < 0.5 ? '冷清' : L.heat < 1.5 ? '正常' : L.heat < 3 ? '偏熱' : '過熱';
+  const cross = L.cross === 'golden' ? '近 3 日黃金交叉' : L.cross === 'dead' ? '近 3 日死亡交叉' : L.ma5 > L.ma10 ? '在上' : '在下，未交叉';
+  return [
+    `策略指標：MA5 乖離 ${pct(bias)}（${Math.abs(bias) < 5 ? '<5% 未追高' : '≥5% 偏離大'}）`,
+    `量比 ${volRatio.toFixed(2)}${volNote}｜量能冷熱：近 5 日均量為 60 日的 ${L.heat.toFixed(1)} 倍（${heat}）`,
+    `MA5 ${L.ma5.toFixed(2)} / MA10 ${L.ma10.toFixed(2)}：MA5 ${cross}`,
+  ].join('\n');
 }
 const fmtLadder = ladder => ladder.map((l, i) => `第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、');
 
@@ -130,7 +146,7 @@ async function premarket() {
   const base = hist.reduce((a, v) => a + v, 0) / hist.length, adrGap = adr.px * fx.px / 5 / (1 + base) / upTo(t2330).at(-1).c - 1;
 
   const estTw = twRows.at(-1).c * (1 + gap), estEtf = +(L.prev * (1 + gap)).toFixed(2);
-  const hits = ladder.map((l, i) => `${estEtf <= l.p ? '●' : '○'} 第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`);
+  const hits = ladder.map((l, i) => `${estEtf <= l.p ? '🎯' : '⚪'} 第${i + 1}批 ${l.p}${l.label ? `(${l.label})` : ''}`);
   const vixNow = vix.px, soxL = levels(sox.rows);
   const ok = [
     [L.K > L.D && L.Kp <= L.Dp && L.K < 30, 'KD 低檔黃金交叉'], [L.hist < 0 && Math.abs(L.hist) < Math.abs(L.histPrev), 'MACD 綠柱縮短'],
@@ -149,10 +165,11 @@ async function premarket() {
     `EWT 法加權 ≈ ${estTw.toFixed(0)}（${pct(gap * 100)}）｜ADR 法台積電 ${pct(adrGap * 100)}`,
     `00406A 昨收 ${L.prev}（${md}）→ 推估開盤 ≈ ${estEtf}`,
     nav ? `昨收折溢價 ${nav.prem > 0 ? '+' : ''}${nav.prem}%（預估淨值 ${nav.nav}${nav.prem > 0 ? '，市價比淨值貴' : ''}）` : '折溢價：讀取失敗',
-    `分批（● = 推估開盤會觸及）：`, ...hits,
+    `分批（🎯 推估開盤會觸及、⚪ 不會）：`, ...hits,
     `觸及的批次若掛限價單，會以開盤價成交。`,
-    `止跌訊號 ${ok.filter(o => o[0]).length}/${ok.length}：${ok.map(o => (o[0] ? '✔' : '✘') + o[1]).join('、')}`,
+    `止跌訊號 ${ok.filter(o => o[0]).length}/${ok.length}：`, ...ok.map(o => `${o[0] ? '✅' : '❌'} ${o[1]}`),
     warn.length ? `轉弱警示：${warn.map(w => w[1]).join('、')}` : '轉弱警示：無',
+    strategyLine(L, L.prev, L.vLast / L.v5, `（${md}）`),
     `VIX ${vixNow.toFixed(1)}｜費半 ${pct((sox.px / sox.rows.at(-2).c - 1) * 100)}｜USD/TWD ${fx.px.toFixed(3)}`,
     `推估為粗估（ADR 溢價、時差、權重差異），僅供參考。${clock}`,
   ].join('\n');
@@ -202,8 +219,8 @@ async function intraday() {
     [lowAge(day(twI)) >= cfg.confirmMin, `大盤當日低 ${lowAge(day(twI)).toFixed(0)} 分未破`],
   ];
   const cCount = C.filter(c => c[0] === true).length, cOk = cCount >= cfg.cMin;
-  const mark = arr => arr.map(([ok, t]) => `${ok === true ? '✔' : ok === false ? '✘' : '?'} ${t}`).join('\n');
-  const detail = `B 止跌確認 ${bOk ? '✔' : '✘'}（任一）\n${mark(B)}\nC 環境 ${cCount}/${C.length} ${cOk ? '✔' : '✘'}（需 ${cfg.cMin}）\n${mark(C)}`;
+  const mark = arr => arr.map(([ok, t]) => `　└ ${ok === true ? '✅' : ok === false ? '❌' : '❔'} ${t}`).join('\n');
+  const detail = `${bOk ? '✅' : '❌'} B 止跌確認（任一）\n${mark(B)}\n${cOk ? '✅' : '❌'} C 環境 ${cCount}/${C.length}（需 ${cfg.cMin}）\n${mark(C)}`;
 
   const signals = [];
   const add = (key, priority, title, msg) => signals.push({ key, priority, title, msg });
@@ -229,8 +246,9 @@ async function intraday() {
   if (hm >= 1000 || FORCE) add(`sum${hour}`, 2, `⚪ ${String(hour).padStart(2, '0')}:00 盤中摘要`, [
     `00406A ${etf}（${pct(etfChg)}）｜當日低 ${dayLow}｜VWAP ${vwap.toFixed(2)}`,
     `加權 ${tw.toFixed(0)}（${pct(twChg)}）`,
-    `分批：${ladder.map((l, i) => `${dayLow <= l.p ? '●' : '○'}${i + 1} ${l.p}`).join(' ')}`,
+    `分批：${ladder.map((l, i) => `${dayLow <= l.p ? '🎯' : '⚪'}${i + 1} ${l.p}`).join(' ')}`,
     detail,
+    strategyLine(L, etf, etfDay.reduce((s, r) => s + r.v, 0) / L.v5, '（當日累計，盤中會持續增加）'),
   ].join('\n'));
 
   console.log(`加權 ${tw.toFixed(0)} (${pct(twChg)}) 15分 ${pct(fast)} | 00406A ${etf} (${pct(etfChg)}) 當日低 ${dayLow} VWAP ${vwap.toFixed(2)}`);
