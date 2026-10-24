@@ -215,6 +215,10 @@ async function institutions(d) {
 
 // 晚間覆盤（台北 22:00）：今天台股收盤總結 + 法人 + 分批是否跌到 + 美股開盤後的走勢與明天推估
 async function evening() {
+  // 排程有 22:00（EVENING_SLOT=dst）與 22:45（std）兩個；美國夏令時間 21:30 開盤用 22:00，冬令 22:30 開盤用 22:45
+  const usDst = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'short' }).format(new Date()).includes('EDT');
+  const slot = process.env.EVENING_SLOT;
+  if (!FORCE && slot && (slot === 'dst') !== usDst) { console.log(`美國${usDst ? '夏令' : '冬令'}時間，這個時段略過`); return; }
   const [etfD, twD, tsmD, ewt, fx, vix, sox, gspc, ixic, nq, es] = await Promise.all([
     chart('00406A.TW', '6mo', '1d'), chart('^TWII', '1y', '1d'), chart('2330.TW', '1mo', '1d'), chart('EWT', '1y', '1d'), chart('TWD=X', '1y', '1d'),
     chart('^VIX', '5d', '1d'), chart('^SOX', '1y', '1d'), chart('^GSPC', '1d', '5m'), chart('^IXIC', '1d', '5m'), chart('NQ=F', '1d', '5m'), chart('ES=F', '1d', '5m')]);
