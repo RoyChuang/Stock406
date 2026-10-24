@@ -73,7 +73,8 @@ section{display:none}section.on{display:block}
     </div>
     <div class="panel" id="ovRisk"><div class="mute">風險等級</div><div class="big">—</div></div>
   </div>
-  <div class="panel"><h2>買點</h2><div id="ovBuy"></div></div>
+  <div class="panel"><h2>買點（你的分批）</h2><div id="ovBuy"></div></div>
+  <div class="panel"><h2>支撐與壓力</h2><div id="ovSR"></div></div>
   <div class="panel"><h2>最新推播</h2><div id="ovSig" class="mute">載入中…</div></div>
 </section>
 
@@ -92,7 +93,7 @@ section{display:none}section.on{display:block}
     </div>
     <div>
       <div class="panel"><h2 id="indTitle">指標</h2><div class="tblwrap"><table id="indTbl"></table></div></div>
-      <div class="panel"><h2>重要價位（由近期價格自動算出）</h2><div class="tblwrap"><table id="lvlTbl"></table></div></div>
+      <div class="panel"><h2>支撐與壓力</h2><div id="lvlTbl"></div></div>
     </div>
   </div>
 </section>
@@ -372,6 +373,14 @@ function renderDetail() {
   s.candle.setData(rows.map(r => ({ time: r.d, open: r.o, high: r.h, low: r.l, close: r.c })));
   ['ma5', 'ma20', 'ma60', 'bbU', 'bbL', 'dif', 'dea', 'K', 'D', 'rsi'].forEach(k => s[k].setData(line(x[k])));
   s.hist.setData(rows.map((r, i) => ({ time: r.d, value: x.hist[i], color: x.hist[i] >= 0 ? '#f8514999' : '#3fb95099' })));
+  // 支撐（綠）、壓力（紅）畫成橫線；00406A 另外畫分批買點（藍）
+  (charts.lines || []).forEach(l => s.candle.removePriceLine(l));
+  const sr = supRes(rows, lastPx(d)), short = g => g.label.split('、')[0];
+  charts.lines = [
+    ...sr.sup.map(g => s.candle.createPriceLine({ price: g.p, color: '#3fb950', lineWidth: g.n >= 3 ? 2 : 1, lineStyle: 2, title: `支撐 ${short(g)}` })),
+    ...sr.res.map(g => s.candle.createPriceLine({ price: g.p, color: '#f85149', lineWidth: g.n >= 3 ? 2 : 1, lineStyle: 2, title: `壓力 ${short(g)}` })),
+    ...(selected === '00406A.TW' ? buyLadder(d).map(r => s.candle.createPriceLine({ price: r.p, color: '#58a6ff', lineWidth: 1, lineStyle: 1, title: `第 ${r.n} 批` })) : []),
+  ];
   const n = rows.length;
   charts.all.forEach(c => c.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 120), to: n + 3 }));
 
@@ -390,14 +399,7 @@ function renderDetail() {
   ];
   $('indTbl').innerHTML = R.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td class="mute">${r[2]}</td></tr>`).join('');
 
-  const lv = levels(x, rows, dp);
-  $('lvlTbl').innerHTML = '<tr><th>價位</th><th>數值</th><th>距現價</th></tr>' + lv.map(([k, v]) => `<tr><td>${k}</td><td>${fmt(v, dp)}</td><td>${rel(v)}</td></tr>`).join('');
-}
-function levels(x, rows, dp) {
-  const N = x.c.length - 1;
-  const lo20 = Math.min(...x.l.slice(-20)), hi20 = Math.max(...x.h.slice(-20)), lo60 = Math.min(...x.l.slice(-60)), hi60 = Math.max(...x.h.slice(-60));
-  return [['近 3 個月最高', hi60], ['近 1 個月最高', hi20], ['布林上緣', x.bbU[N]], ['季平均價', x.ma60[N]], ['月平均價', x.ma20[N]], ['5 日平均價', x.ma5[N]],
-    ['布林下緣', x.bbL[N]], ['近 1 個月最低', lo20], ['近 3 個月最低', lo60]].filter(r => r[1] != null).sort((a, b) => b[1] - a[1]);
+  $('lvlTbl').innerHTML = srHtml(d, dp);
 }
 
 // ---------- Supabase ----------
@@ -413,7 +415,7 @@ async function loadDb() {
     const [pos, lad, tr] = await Promise.all([q('positions'), q('ladder').order('seq'), q('trades').order('traded_on', { ascending: false }).order('id', { ascending: false }).limit(10)]);
     DB = { email: session.user.email, pos: pos.data?.[0], ladder: lad.data || [], trades: tr.data || [] };
   }
-  renderAuth(); renderPosition(); renderOverview();
+  renderAuth(); renderPosition(); renderOverview(); if (DATA[selected]) renderDetail();
 }
 function renderAuth() {
   if (!sb) { $('auth').innerHTML = '<span class="mute">登入元件載入失敗，部位只存在這個瀏覽器</span>'; return; }
@@ -578,6 +580,53 @@ function renderWatch() {
   $('watch').innerHTML = `<ul style="margin:0;padding-left:18px">${items.join('')}</ul>`;
 }
 
+// 支撐與壓力：前低／前高（前後各 5 天都沒有更低／更高）、平均價、布林通道、近 3 個月成交最多的價位、整數關卡；
+// 相差 1% 以內合併成同一區，來源越多越可靠（★）。scripts/alert.mjs 的 supRes 是同一套算法
+function supRes(rows, p) {
+  const c = rows.map(r => r.c), n = c.length, md = d => d.slice(5).replace('-', '/');
+  const ma = k => n >= k ? c.slice(-k).reduce((a, b) => a + b, 0) / k : null, m20 = ma(20);
+  const sd = Math.sqrt(c.slice(-20).reduce((s, v) => s + (v - m20) ** 2, 0) / 20);
+  const cand = [['月平均價', m20], ['季平均價', ma(60)], ['半年平均價', ma(120)], ['年平均價', ma(240)], ['布林下緣', m20 - 2 * sd], ['布林上緣', m20 + 2 * sd],
+    ['近 1 個月最低', Math.min(...rows.slice(-20).map(r => r.l))], ['近 1 個月最高', Math.max(...rows.slice(-20).map(r => r.h))]];
+  for (let i = Math.max(5, n - 250); i < n - 5; i++) {
+    const w = rows.slice(i - 5, i + 6);
+    if (rows[i].l <= Math.min(...w.map(r => r.l))) cand.push([`前低 ${md(rows[i].d)}`, rows[i].l]);
+    if (rows[i].h >= Math.max(...w.map(r => r.h))) cand.push([`前高 ${md(rows[i].d)}`, rows[i].h]);
+  }
+  const vr = rows.slice(-60), lo = Math.min(...vr.map(r => r.l)), hi = Math.max(...vr.map(r => r.h)), bin = Array(20).fill(0);
+  if (hi > lo) {
+    vr.forEach(r => bin[Math.min(19, Math.floor(((r.h + r.l + r.c) / 3 - lo) / (hi - lo) * 20))] += r.v || 0);
+    const k = bin.indexOf(Math.max(...bin));
+    if (bin[k] > 0) cand.push(['近 3 個月成交最多', lo + (k + 0.5) * (hi - lo) / 20]);
+  }
+  const step = [[10, 0.5], [50, 1], [100, 5], [500, 10], [1000, 50], [5000, 100], [Infinity, 1000]].find(([m]) => p < m)[1];
+  cand.push(['整數關卡', Math.floor(p / step) * step], ['整數關卡', Math.ceil(p / step) * step]);
+  const G = [];
+  for (const [k, v] of cand.filter(([, v]) => v != null && Math.abs(v / p - 1) < 0.15).sort((a, b) => b[1] - a[1])) {
+    const g = G.at(-1);
+    if (g && (g.ref - v) / g.ref < 0.01) { g.vs.push(v); g.ks.push(k); } else G.push({ ref: v, vs: [v], ks: [k] });
+  }
+  const out = G.map(g => {
+    const lows = g.ks.filter(k => k.startsWith('前低')), highs = g.ks.filter(k => k.startsWith('前高'));
+    const ks = [...new Set(g.ks.filter(k => !/^前[低高]/.test(k)))];
+    if (lows.length) ks.unshift(`${g.ref > p ? '跌破的前低' : '前低'} ${lows.slice(-2).map(k => k.slice(3)).join('、')}${lows.length > 2 ? ` 等 ${lows.length} 次` : ''}`);
+    if (highs.length) ks.unshift(`${g.ref < p ? '突破的前高' : '前高'} ${highs.slice(-2).map(k => k.slice(3)).join('、')}${highs.length > 2 ? ` 等 ${highs.length} 次` : ''}`);
+    return { p: g.vs.reduce((a, b) => a + b, 0) / g.vs.length, label: ks.join('、'), n: g.ks.length };
+  });
+  return { sup: out.filter(g => g.p < p * 0.998).slice(0, 3), res: out.filter(g => g.p > p * 1.002).reverse().slice(0, 2) };
+}
+const stars = n => '★'.repeat(Math.min(3, n)) + '☆'.repeat(3 - Math.min(3, n));
+function srHtml(d, dp = 2) {
+  const p = lastPx(d), { sup, res } = supRes(d.rows, p), row = (g, k) => `<tr><td>${k}</td><td><b>${fmt(g.p, dp)}</b></td><td class="${cls(g.p - p)}">${sgn((g.p / p - 1) * 100)}%</td><td class="mute" style="white-space:normal;text-align:left">${g.label}</td><td title="來源越多越可靠">${stars(g.n)}</td></tr>`;
+  return `<div class="tblwrap"><table><tr><th></th><th>價位</th><th>距現價</th><th>依據</th><th>強度</th></tr>
+    ${[...res].reverse().map(g => row(g, '壓力')).join('')}
+    <tr><td class="mute">現價</td><td><b>${fmt(p, dp)}</b></td><td></td><td></td><td></td></tr>
+    ${sup.map(g => row(g, '支撐')).join('')}</table></div>
+    <div class="mute" style="font-size:12px;margin-top:6px">支撐＝過去常在這附近止跌、比較容易有人接；壓力＝過去常在這附近漲不上去（跌破的前低常會變成壓力）。好幾個依據疊在一起（★ 多）比較可靠，但都不保證守得住。</div>`;
+}
+
+// 還沒買的分批價位：登入用自己的設定，未登入用推播預設（上次收盤、布林下緣、近 3 個月最低）
+const buyLadder = d => dbLadder(d, DB ? DB.ladder : [[1, 'prev'], [2, 'bbL'], [3, 'lo60']].map(([seq, level]) => ({ seq, level, status: 'active' }))).filter(r => !r.filled);
 // ---------- 總覽 ----------
 async function renderOverview() {
   const d = DATA['00406A.TW'];
@@ -586,7 +635,8 @@ async function renderOverview() {
     $('ovPx').innerHTML = `<span class="${cls(ch)}">${fmt(p)}</span>`;
     $('ovChg').innerHTML = `<span class="${cls(ch)}">${sgn(ch)}（${sgn(ch / d.rows[N - 1].c * 100)}%）</span>`;
     $('ovTime').textContent = marketTime(d.meta);
-    const lad = dbLadder(d, DB ? DB.ladder : [[1, 'prev'], [2, 'bbL'], [3, 'lo60']].map(([seq, level]) => ({ seq, level, status: 'active' }))).filter(r => !r.filled);
+    $('ovSR').innerHTML = srHtml(d);
+    const lad = buyLadder(d);
     $('ovBuy').innerHTML = lad.length ? `<div class="buy">${lad.map((r, i) => {
       const gap = (r.p / p - 1) * 100, hit = r.p >= p;
       return `<span>${hit ? '🎯' : '⚪'} 第 ${r.n ?? i + 1} 批</span><span><b>${fmt(r.p)}</b> <span class="mute">${r.src}</span></span>
