@@ -86,7 +86,8 @@ function ladderOf(L) {
       if (!m) throw new Error(`ALERT_CONFIG ladder 看不懂：${x}`);
       lv = { p: +(L.prev * (1 + m[1] / 100)).toFixed(2), label: `上次收盤 ${m[1]}%` };
     }
-    if (!out.some(o => Math.abs(o.p - lv.p) / o.p < 0.005)) out.push({ ...lv, n });
+    // 價位很接近也要每批都留著：以前相差 <0.5% 會丟掉後面那批，布林下緣貼近上次收盤時第 2 批就從推播消失
+    out.push({ ...lv, n });
   }
   return out;
 }
