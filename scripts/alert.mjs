@@ -214,10 +214,12 @@ async function premarket() {
 
 // 推播紀錄寫進 Supabase signals（公開可讀，不含張數、均價等個人資料）；測試模式不寫，免得污染紀錄
 async function logSignal({ trade_date, kind, title, price, risk: r, verdict, batches }) {
-  if (!dbReady || process.env.ALERT_PREFIX) return;
+  if (process.env.ALERT_PREFIX) { console.log('測試模式，不寫推播紀錄'); return; }
+  if (!dbReady) { console.log('推播紀錄沒寫入：沒有設定 SUPABASE_URL / SUPABASE_SECRET_KEY'); return; }
   try {
     await rest('signals', { method: 'POST', body: { trade_date, symbol: '00406A', kind, title, price,
       risk_level: r?.level, risk_score: r?.score, reasons: r?.reasons, verdict, batches } });
+    console.log(`推播紀錄已寫入（${kind} ${trade_date}）`);
   } catch (e) { console.log('推播紀錄寫入失敗：', e.message); }
 }
 
