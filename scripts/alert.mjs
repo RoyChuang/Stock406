@@ -1,7 +1,7 @@
 // 台股訊號推播（ntfy），由 GitHub Actions 執行：
 //   MODE=intraday（預設）盤中每 5 分鐘：依使用者的分批規則（B 止跌確認 + C 環境過濾）判斷是否符合，並推到價、跌破布林下緣、急跌、每小時摘要
-//   MODE=premarket        08:23（週一到週六）：用美股推估開盤，推風險等級與買點卡片
-//   MODE=evening          22:07 / 22:52：今天收盤、法人、明天推估，推風險等級與買點卡片
+//   MODE=premarket        08:30（週一到週六）：用美股推估開盤，推風險等級與買點卡片
+//   MODE=evening          22:00 / 22:45：今天收盤、法人、明天推估，推風險等級與買點卡片
 // 環境變數：
 //   NTFY_TOPIC    ntfy 主題（放 GitHub Secret，不要寫進公開 repo）；未設定時只印出不推播
 //   ALERT_CONFIG  JSON，覆蓋下方 DEFAULTS，例如 {"ladder":["prev","bbL","lo60"]}（放 Secret）
@@ -256,9 +256,9 @@ async function institutions(d) {
   } catch (e) { console.log('法人資料讀取失敗', e.message); return null; }
 }
 
-// 晚間覆盤（台北 22:07）：今天台股收盤總結 + 法人 + 分批是否跌到 + 美股開盤後的走勢與明天推估
+// 晚間覆盤（台北 22:00）：今天台股收盤總結 + 法人 + 分批是否跌到 + 美股開盤後的走勢與明天推估
 async function evening() {
-  // 排程有 22:07（EVENING_SLOT=dst）與 22:52（std）兩個；美國夏令時間 21:30 開盤用 22:07，冬令 22:30 開盤用 22:52
+  // 排程有 22:00（EVENING_SLOT=dst）與 22:45（std）兩個；美國夏令時間 21:30 開盤用 22:00，冬令 22:30 開盤用 22:45
   const usDst = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'short' }).format(new Date()).includes('EDT');
   const slot = process.env.EVENING_SLOT;
   if (!FORCE && slot && (slot === 'dst') !== usDst) { console.log(`美國${usDst ? '夏令' : '冬令'}時間，這個時段略過`); return; }
