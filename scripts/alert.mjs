@@ -10,6 +10,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { dbReady, rest } from './supabase.mjs';
 import { supRes } from './sr.mjs';
+import { fetchMargin, marginLine } from './margin.mjs';
 
 const DEFAULTS = {
   // 00406A 分批價位。每一項可以是固定價格，或每次用最新日 K 計算的動態價位：
@@ -277,7 +278,8 @@ async function evening() {
   const upTo = d => d.rows.filter(r => r.d <= dT), before = d => d.rows.filter(r => r.d < dT);
   const bar = upTo(etfD).at(-1), Lb = levels(before(etfD)), L = levels(upTo(etfD)), twRows = upTo(twD);
   const etfChg = (bar.c / Lb.prev - 1) * 100;
-  const [nav, inst] = await Promise.all([inav('00406A'), institutions(dT)]);
+  // 融資融券約 21:00 後公布，晚間覆盤時通常已經有了；讀不到就不放這行
+  const [nav, inst, mg] = await Promise.all([inav('00406A'), institutions(dT), fetchMargin(bar.d.replace(/-/g, '')).catch(e => (console.log('融資融券讀取失敗', e.message), null))]);
   const sg = x => (x >= 0 ? '+' : '') + Math.round(x).toLocaleString('en-US');
   // 今天跌到哪幾批（用今天以前的價位）；明天的買點用含今天的價位
   const hitToday = ladderOf(Lb).map(l => bar.l <= l.p ? l.n : 0).filter(Boolean);
@@ -288,6 +290,7 @@ async function evening() {
   const msg = [
     `今天：最低 ${bar.l.toFixed(2)}｜${hitToday.length ? `第 ${hitToday.join('、')} 批有跌到` : '分批價位都沒跌到'}${navOk ? `｜收盤比淨值${premTxt(nav.prem)}` : ''}`,
     inst ? `法人：00406A 外資 ${inst.etf ? sg(inst.etf.f) + ' 張' : '—'}｜整個台股外資 ${sg(inst.mkt.f)} 億` : '法人：還沒公布',
+    ...marginLine(mg, bar.c),
     est != null ? `明天：依目前美股推估 00406A 約 ${est}（${pct(gap * 100)}），美股還沒收盤，明早 8:30 再更新` : '明天：美股還沒開盤，明早 8:30 推估',
     ...riskLines(r),
     ...buyLines(ladderOf(L), est, '明天開盤可能就到'),

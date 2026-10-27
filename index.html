@@ -77,6 +77,7 @@ section{display:none}section.on{display:block}
   <div class="panel"><h2>止跌跡象</h2><div id="ovStop"></div></div>
   <div class="panel"><h2>支撐與壓力</h2><div id="ovSR"></div></div>
   <div class="panel"><h2>殖利率位置</h2><div id="ovYld"></div></div>
+  <div class="panel"><h2>融資融券</h2><div id="ovMg"></div></div>
   <div class="panel"><h2>最新推播</h2><div id="ovSig" class="mute">載入中…</div></div>
 </section>
 
@@ -264,7 +265,7 @@ async function refreshAll() {
   $('status').textContent = '更新中…';
   const out = await Promise.allSettled(SYMBOLS.map(x => load(x.s)));
   out.forEach((o, i) => { if (o.status === 'fulfilled') DATA[SYMBOLS[i].s] = o.value; else DATA[SYMBOLS[i].s] = { error: String(o.reason) }; });
-  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview(); renderBacktest();
+  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview(); renderBacktest(); renderMargin();
   let src = '即時';
   if (!LIVE) {
     try { const u = await (await fetch(`data/updated.json?t=${Date.now()}`, { cache: 'no-store' })).json(); src = '資料抓取於 ' + new Date(u.t).toLocaleString('zh-TW'); } catch {}
@@ -680,6 +681,27 @@ async function renderOverview() {
   $('ovRisk').innerHTML = r ? `<div class="mute">風險等級（${t(r.ts)} ${KIND[r.kind] || r.kind}）</div><div class="big">${r.risk_level}</div>
     <div>${(r.reasons || []).map(x => `<div>・${x}</div>`).join('') || '<span class="mute">沒有明顯風險因素</span>'}</div>` : '<div class="mute">風險等級</div><div class="big">—</div>';
   $('ovSig').innerHTML = `<div class="mute">${t(s.ts)} · ${KIND[s.kind] || s.kind}</div><div><b>${s.title}</b></div>${s.verdict ? `<div style="margin-top:4px">${s.verdict}</div>` : ''}`;
+}
+
+// ---------- 融資融券（data/margin.json，證交所每天晚上公布；以大盤總額為主） ----------
+async function renderMargin() {
+  let D = [];
+  try { D = (await (await fetch(`data/margin.json?t=${Date.now()}`, { cache: 'no-store' })).json()).days.filter(x => !x.closed); } catch {}
+  if (!D.length) { $('ovMg').innerHTML = '<span class="mute">融資融券資料還沒產生（證交所每天晚上約 9 點後公布）</span>'; return; }
+  const m = D.at(-1), first = D[Math.max(0, D.length - 20)], n = Math.min(20, D.length);
+  const sg = (v, dp = 0) => `<span class="${cls(v)}">${v >= 0 ? '+' : ''}${fmt(v, dp)}</span>`, ratio = x => x.short / x.fin * 100;
+  const dA = m.amt - m.amtPrev, dA20 = m.amt - first.amtPrev, dE = m.etfFin - m.etfFinPrev, dE20 = m.etfFin - first.etfFinPrev;
+  $('ovMg').innerHTML = `<div class="mute" style="font-size:12px">${m.date} 收盤後</div>
+    <div class="tblwrap"><table><tr><th></th><th>現在</th><th>這一天</th><th>近 ${n} 天</th></tr>
+      <tr><td style="text-align:left">大盤融資金額（借錢買股）</td><td>${fmt(m.amt, 0)} 億</td><td>${sg(dA)} 億</td><td>${sg(dA20)} 億</td></tr>
+      <tr><td style="text-align:left">大盤券資比（放空 ÷ 借錢買）</td><td>${fmt(ratio(m), 1)}%</td><td>${sg(ratio(m) - m.shortPrev / m.finPrev * 100, 1)}</td><td>${sg(ratio(m) - first.shortPrev / first.finPrev * 100, 1)}</td></tr>
+      ${m.etfFin != null ? `<tr><td style="text-align:left">00406A 融資餘額</td><td>${fmt(m.etfFin, 0)} 張</td><td>${sg(dE)} 張</td><td>${first.etfFinPrev != null ? sg(dE20) + ' 張' : '—'}</td></tr>` : ''}
+    </table></div>
+    <details style="margin-top:6px"><summary class="mute" style="cursor:pointer;font-size:12px">每天的變化</summary><div class="tblwrap"><table>
+      <tr><th>日期</th><th>大盤融資（億）</th><th>增減</th><th>券資比</th><th>00406A 融資（張）</th><th>增減</th></tr>
+      ${D.slice(-n).reverse().map(x => `<tr><td>${x.date.slice(5)}</td><td>${fmt(x.amt, 0)}</td><td>${sg(x.amt - x.amtPrev)}</td><td>${fmt(ratio(x), 1)}%</td><td>${x.etfFin != null ? fmt(x.etfFin, 0) : '—'}</td><td>${x.etfFin != null ? sg(x.etfFin - x.etfFinPrev) : '—'}</td></tr>`).join('')}
+    </table></div></details>
+    <div class="mute" style="font-size:12px;margin-top:6px">融資＝向券商借錢買股票。大盤融資減少，代表借錢買的人退場、之後被迫賣出的壓力變小，常出現在跌勢後段；股價跌、融資卻一直增加，代表很多人借錢搶便宜，再跌可能引發斷頭賣壓。券資比高代表放空的人相對多，之後回補可能推升股價。</div>`;
 }
 
 // ---------- 殖利率位置（配息資料來自 data/backtest.json） ----------
