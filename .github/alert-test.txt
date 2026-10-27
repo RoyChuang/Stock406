@@ -1,3 +1,2 @@
-modes: premarket
-# 第一行 modes: 可填 premarket / evening / intraday（空白分隔），改這個檔並 push 就會跑測試
-# 2026-10-24T14:18:11+08:00
+modes: premarket# 第一行 modes: 可填 premarket / evening / intraday（空白分隔），改這個檔並 push 就會跑測試# 2026-10-27T08:39:53+08:00
+

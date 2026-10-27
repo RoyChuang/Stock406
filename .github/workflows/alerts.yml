@@ -6,13 +6,13 @@ on:
   push:
     paths: ['.github/alert-test.txt']
   schedule:
-    # 盤前：台北時間週一到週六 08:30（UTC 00:30）；台股休市但昨晚美股有開時改推「美股收盤總結」
-    - cron: '30 0 * * 1-6'
-    # 盤中：台北時間平日 09:00–13:55（UTC 01–05 點），每 5 分鐘；腳本會再判斷 13:35 後與休市日略過
-    - cron: '*/5 1-5 * * 1-5'
-    # 晚間覆盤：今天台股總結 + 美股開盤後走勢。美國夏令時間台北 22:00（UTC 14:00）、冬令 22:45（UTC 14:45），腳本會自動選一個
-    - cron: '0 14 * * 1-5'
-    - cron: '45 14 * * 1-5'
+    # 盤前：台北時間週一到週六 08:23（UTC 00:23，避開整點半點，GitHub 在那時最塞、常延遲數小時或丟掉）；台股休市但昨晚美股有開時改推「美股收盤總結」
+    - cron: '23 0 * * 1-6'
+    # 盤中：台北時間平日 09:02–13:57（UTC 01–05 點），每 5 分鐘、錯開整點；腳本會再判斷 13:35 後與休市日略過
+    - cron: '2-57/5 1-5 * * 1-5'
+    # 晚間覆盤：今天台股總結 + 美股開盤後走勢。美國夏令時間台北 22:07（UTC 14:07）、冬令 22:52（UTC 14:52），腳本會自動選一個
+    - cron: '7 14 * * 1-5'
+    - cron: '52 14 * * 1-5'
 
 permissions:
   contents: read
@@ -44,29 +44,29 @@ jobs:
           m=$(head -1 .github/alert-test.txt | sed -n 's/^modes:s*//p')
           echo "TEST_MODES=${m:-premarket evening intraday}" >> $GITHUB_ENV
       - name: Premarket briefing
-        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'premarket')) || github.event.schedule == '30 0 * * 1-6'
+        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'premarket')) || github.event.schedule == '23 0 * * 1-6'
         run: node scripts/alert.mjs
         env:
           MODE: premarket
       - name: Evening review
-        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'evening')) || github.event.schedule == '0 14 * * 1-5' || github.event.schedule == '45 14 * * 1-5'
+        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'evening')) || github.event.schedule == '7 14 * * 1-5' || github.event.schedule == '52 14 * * 1-5'
         run: node scripts/alert.mjs
         env:
           MODE: evening
-          EVENING_SLOT: ${{ github.event.schedule == '0 14 * * 1-5' && 'dst' || github.event.schedule == '45 14 * * 1-5' && 'std' || '' }}
+          EVENING_SLOT: ${{ github.event.schedule == '7 14 * * 1-5' && 'dst' || github.event.schedule == '52 14 * * 1-5' && 'std' || '' }}
       # 用快取保存當天已推播的訊號，避免重複推
       - uses: actions/cache/restore@v4
-        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'intraday')) || github.event.schedule == '*/5 1-5 * * 1-5'
+        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'intraday')) || github.event.schedule == '2-57/5 1-5 * * 1-5'
         with:
           path: alert-state.json
           key: alert-state-${{ github.run_id }}
           restore-keys: alert-state-
       - name: Intraday signals
-        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'intraday')) || github.event.schedule == '*/5 1-5 * * 1-5'
+        if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'intraday')) || github.event.schedule == '2-57/5 1-5 * * 1-5'
         run: node scripts/alert.mjs
       # 測試模式不保存去重紀錄，免得影響正式提醒
       - uses: actions/cache/save@v4
-        if: always() && github.event.schedule == '*/5 1-5 * * 1-5'
+        if: always() && github.event.schedule == '2-57/5 1-5 * * 1-5'
         with:
           path: alert-state.json
           key: alert-state-${{ github.run_id }}
