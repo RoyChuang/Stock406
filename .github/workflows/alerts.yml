@@ -38,6 +38,7 @@ jobs:
         with:
           node-version: 22
       # 測試時只跑 alert-test.txt 第一行 modes: 列出的類型（例如 modes: premarket），沒寫就三種都跑
+      # 第一行加上 formal（例如 modes: premarket formal）時，盤前與晚間改用正式模式：標題不加「[測試]」、會寫推播紀錄，用來補跑被 GitHub 延遲的排程
       - name: Test modes
         if: github.event_name != 'schedule'
         run: |
@@ -45,12 +46,16 @@ jobs:
           echo "TEST_MODES=${m:-premarket evening intraday}" >> $GITHUB_ENV
       - name: Premarket briefing
         if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'premarket')) || github.event.schedule == '23 0 * * 1-6'
-        run: node scripts/alert.mjs
+        run: |
+          if head -1 .github/alert-test.txt | grep -qw formal; then export ALERT_PREFIX= FORCE=; fi
+          node scripts/alert.mjs
         env:
           MODE: premarket
       - name: Evening review
         if: (github.event_name != 'schedule' && contains(env.TEST_MODES, 'evening')) || github.event.schedule == '7 14 * * 1-5' || github.event.schedule == '52 14 * * 1-5'
-        run: node scripts/alert.mjs
+        run: |
+          if head -1 .github/alert-test.txt | grep -qw formal; then export ALERT_PREFIX= FORCE=; fi
+          node scripts/alert.mjs
         env:
           MODE: evening
           EVENING_SLOT: ${{ github.event.schedule == '7 14 * * 1-5' && 'dst' || github.event.schedule == '52 14 * * 1-5' && 'std' || '' }}
