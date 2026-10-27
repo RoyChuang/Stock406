@@ -11,7 +11,7 @@
 | `scripts/fetch-data.mjs` | 抓 Yahoo 日線存成 `data/*.json`（`^` 換成 `_`） | Actions |
 | `scripts/summary.mjs` | 把 data 濃縮成約 3 KB 文字摘要，給雲端 Claude 讀（不要讓 Claude 直接讀原始 JSON，約 325 KB） | 雲端排程 |
 | `scripts/alert.mjs` | ntfy 推播：`MODE=premarket` 盤前推估（週一到週六；台股休市但昨晚美股有開時改推「美股收盤總結」）、`MODE=intraday` 盤中規則判斷、`MODE=evening` 晚間覆盤（美國夏令 22:00、冬令 22:45，依 `EVENING_SLOT` 自動擇一）（台股收盤、三大法人 BFI82U/T86、分批有沒有跌到、美股開盤後走勢與明天推估） | Actions |
-| `.github/workflows/pages.yml` | 平日每 15 分鐘抓資料 → 部署 Pages，並把資料強制推到單一 commit 的 `data` 分支 | Actions |
+| `.github/workflows/pages.yml` | 抓資料（GitHub 排程常延遲數小時，盤中由 alerts.yml 每次 intraday 執行完觸發） → 部署 Pages，並把資料強制推到單一 commit 的 `data` 分支 | Actions |
 | `.github/workflows/alerts.yml` | 由 cron-job.org 準時呼叫 workflow_dispatch（`job` = premarket 08:30、intraday 09:00–13:55 每 5 分鐘、evening-dst 22:00 / evening-std 22:45）；GitHub 排程常延遲數小時或丟掉，只留盤中排程當備援（共用去重紀錄）。網頁 Run workflow 填 job 可正式補跑，留空是測試；修改 `.github/alert-test.txt` 並 push 會觸發測試模式（第一行 `modes: premarket` 可指定只測哪幾種） | Actions（觸發：cron-job.org） |
 
 雲端 Claude 排程（claude.ai routines）連不到 Yahoo 和 github.io，只能讀 repo：`git fetch origin data && git archive origin/data | tar -x -C data && node scripts/summary.mjs`。

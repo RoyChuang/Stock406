@@ -21,6 +21,8 @@ on:
 
 permissions:
   contents: read
+  # 盤中觸發 pages.yml 更新儀表板資料
+  actions: write
 
 concurrency:
   group: alerts
@@ -77,3 +79,10 @@ jobs:
         with:
           path: alert-state.json
           key: alert-state-${{ github.run_id }}
+      # GitHub 排程的 pages.yml 常好幾小時才跑一次，盤中借 cron-job.org 的準時觸發順便更新儀表板資料
+      - name: Refresh dashboard data
+        if: always() && env.JOB == 'intraday'
+        continue-on-error: true
+        run: gh workflow run pages.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
