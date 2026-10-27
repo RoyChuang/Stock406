@@ -460,10 +460,18 @@ function dbLadder(d, rows = DB.ladder) {
   const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10), x = d.ind;
   const N = d.rows.at(-1).d === today ? x.c.length - 2 : x.c.length - 1;
   const v = { prev: x.c[N], bbL: x.bbL[N], lo20: Math.min(...x.l.slice(N - 19, N + 1)), lo60: Math.min(...x.l.slice(N - 59, N + 1)) };
+  // 最近的支撐（和 alert.mjs 一樣：從上次收盤再低 1% 開始找，15% 內沒有支撐時用 -3%）
+  const sup = supRes(d.rows.slice(0, N + 1), v.prev * 0.99).sup[0];
+  v.sup = sup ? sup.p : v.prev * 0.97;
+  const srcOf = (lv, m) => lv === 'sup' ? (sup ? `最近的支撐：${sup.label.split('、')[0]}` : '上次收盤 -3%（附近沒有支撐）') : LVL[lv] || (m ? `上次收盤 ${m[1]}%` : '固定價');
+  let last = null;
   return rows.map(r => {
     const m = /^pct(-?\d+(?:\.\d+)?)$/.exec(r.level);
-    const p = !isNaN(+r.level) ? +r.level : m ? v.prev * (1 + m[1] / 100) : v[r.level];
-    return { id: r.id, n: r.seq, src: LVL[r.level] || (m ? `上次收盤 ${m[1]}%` : '固定價'), p: +(+p).toFixed(2), q: r.lots, filled: r.status !== 'active' };
+    let p = +(+(!isNaN(+r.level) ? +r.level : m ? v.prev * (1 + m[1] / 100) : v[r.level])).toFixed(2), src = srcOf(r.level, m);
+    const filled = r.status !== 'active';
+    // 還沒買的批次不能比前一批貴（和推播一致），否則會先買到張數多的那批
+    if (!filled) { if (last && p > last.p) { p = last.p; src += `，不高於第 ${last.n} 批`; } last = { p, n: r.seq }; }
+    return { id: r.id, n: r.seq, src, p, q: r.lots, filled };
   });
 }
 function renderPosition() {

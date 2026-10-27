@@ -3,7 +3,7 @@
 //   node scripts/db.mjs show [代號]                         看部位、預算、分批、規則
 //   node scripts/db.mjs trade buy|sell 日期 價格 張數 [備註] [代號]   記一筆成交
 //   node scripts/db.mjs budget 金額 [代號]                   設定總預算（含已投入）
-//   node scripts/db.mjs ladder 價位:張數 ... [代號]          重設分批，例如 prev:4 bbL:9 lo60:15 或 8.5:5
+//   node scripts/db.mjs ladder 價位:張數 ... [代號]          重設分批，例如 sup:1 bbL:2 lo60:3 或 8.5:5（價位見 alert.mjs DEFAULTS）
 //   node scripts/db.mjs fill 批次 [代號]                     把某一批標成已買，推播就不再看這批
 //   node scripts/db.mjs rules 分鐘 項數 [代號]               B 的分鐘數、C 至少幾項
 // 代號預設 00406A

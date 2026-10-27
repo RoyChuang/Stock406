@@ -13,14 +13,15 @@ import { supRes } from './sr.mjs';
 
 const DEFAULTS = {
   // 00406A 分批價位。每一項可以是固定價格，或每次用最新日 K 計算的動態價位：
-  //   "prev" 昨收、"bbL" 布林下軌、"lo20" 近 20 日低、"lo60" 近 60 日低、"pct-3" 昨收 -3%
-  // 相差不到 0.5% 的價位視為同一批
+  //   "prev" 昨收、"bbL" 布林下軌、"lo20" 近 20 日低、"lo60" 近 60 日低、"pct-3" 昨收 -3%、"sup" 昨收 1% 以下最近的支撐
+  // 後面的批次價格不會高於前一批（布林下緣貼著價格往下走時，會跟前一批一起觸發）
   ladder: ['prev', 'bbL', 'lo60'],
-  // 使用者的分批規則（2026-10-23 定）：每一批都要 B 且 C
+  // 使用者的分批規則（2026-10-23 定，10-27 修改）：每一批都要 B 且 C
   //   B 止跌確認：00406A 當日低點已經 confirmMin 分鐘沒有被跌破，或現價站上 VWAP
-  //   C 環境過濾：5 項環境條件中至少 cMin 項符合
+  //   C 環境過濾：5 項環境條件中至少 cMin 項符合，而且「市價比淨值貴不超過 premMax %」一定要符合
   confirmMin: 15,
   cMin: 3,
+  premMax: 0.3,
 };
 let ladderSrc = 'ALERT_CONFIG';
 const cfg = { ...DEFAULTS, ...JSON.parse(process.env.ALERT_CONFIG || '{}') };
@@ -70,10 +71,13 @@ function levels(rows) {
   return { prev, ma5: sma(c, 5), ma10: sma(c, 10), ma20, ma120: c.length >= 120 ? sma(c, 120) : null, bbL: ma20 - 2 * sd,
     cross, vLast: v.at(-1), v5: sma(v.slice(0, -1), 5), heat: sma(v, 5) / sma(v, 60),
     lo20: Math.min(...rows.slice(-20).map(r => r.l)), lo60: Math.min(...rows.slice(-60).map(r => r.l)),
-    hist: hist.at(-1), histPrev: hist.at(-2), K, D, Kp, Dp };
+    // 第 1 批用的「最近的支撐」從上次收盤再低 1% 開始找，太貼近現價的（例如貼著價格的布林下緣）不算
+    hist: hist.at(-1), histPrev: hist.at(-2), K, D, Kp, Dp, sup: supRes(rows, prev * 0.99).sup[0] };
 }
 function ladderOf(L) {
-  const DYN = { prev: [L.prev, '上次收盤價'], bbL: [L.bbL, '布林下緣'], lo20: [L.lo20, '近 1 個月最低'], lo60: [L.lo60, '近 3 個月最低'] };
+  // 最近的支撐：上次收盤 1% 以下、15% 以內都沒有支撐時，用上次收盤 -3% 代替
+  const sup = L.sup ? [L.sup.p, `最近的支撐：${L.sup.ks[0]}`] : [L.prev * 0.97, '上次收盤 -3%（附近沒有支撐）'];
+  const DYN = { prev: [L.prev, '上次收盤價'], bbL: [L.bbL, '布林下緣'], lo20: [L.lo20, '近 1 個月最低'], lo60: [L.lo60, '近 3 個月最低'], sup };
   const out = [];
   // 每項可以是 { n: 第幾批, level } （Supabase）或單純的價位值（ALERT_CONFIG，依順序編號）
   for (const [i, item] of cfg.ladder.entries()) {
@@ -87,6 +91,9 @@ function ladderOf(L) {
       lv = { p: +(L.prev * (1 + m[1] / 100)).toFixed(2), label: `上次收盤 ${m[1]}%` };
     }
     // 價位很接近也要每批都留著：以前相差 <0.5% 會丟掉後面那批，布林下緣貼近上次收盤時第 2 批就從推播消失
+    // 後面的批次不能比前一批貴，否則會先買到張數多的那批
+    const last = out.at(-1);
+    if (last && lv.p > last.p) lv = { p: last.p, label: `${lv.label}，不高於第 ${last.n} 批` };
     out.push({ ...lv, n });
   }
   return out;
@@ -202,7 +209,7 @@ async function premarket() {
     ...buyLines(ladder, estEtf, '開盤可能就到'),
     ...supLine(etf.rows.filter(r => r.d < dT), estEtf),
     ...stopLine(L),
-    `⏸ 結論：開盤前還不能判斷你的規則，盤中符合會震動通知你${nav && nav.prem > 0 ? `（目前比淨值貴 ${nav.prem}%，這項不符合）` : ''}`,
+    `⏸ 結論：開盤前還不能判斷你的規則，盤中符合會震動通知你${nav && nav.prem > cfg.premMax ? `（目前比淨值貴 ${nav.prem}%，超過 ${cfg.premMax}%，這項一定要符合）` : ''}`,
     `上次收盤 ${L.prev}（${dT.slice(5).replace('-', '/')}）｜依美股推估，僅供參考｜${clock}`,
   ].join('\n');
   await push(title, msg, 3, ['sunrise']);
@@ -332,20 +339,21 @@ async function intraday() {
   const fx15 = chg15(fxI.rows), nq15 = chg15(nqI.rows), nqR = nqI.rows, nq60 = nqR.length > 12 ? (nqR.at(-1).c / nqR.at(-13).c - 1) * 100 : 0;
   const C = [
     // 每項第三欄是不符合時的短原因
-    [nav ? nav.prem <= 0 : null, nav ? `沒有買貴：市價比基金實際價值（淨值 ${nav.nav}）${nav.prem > 0 ? `貴 ${nav.prem}%` : nav.prem < 0 ? `便宜 ${-nav.prem}%` : '一樣'}` : '市價與淨值比較：讀取失敗', '比淨值貴'],
+    [nav ? nav.prem <= cfg.premMax : null, nav ? `沒有買貴（一定要符合，最多貴 ${cfg.premMax}%）：市價比基金實際價值（淨值 ${nav.nav}）${nav.prem > 0 ? `貴 ${nav.prem}%` : nav.prem < 0 ? `便宜 ${-nav.prem}%` : '一樣'}` : '市價與淨值比較：讀取失敗（這項先不檢查）', '比淨值貴'],
     [fx15 < 0.15, `台幣沒有急貶（15 分鐘 ${pct(-fx15)}）`, '台幣急貶'],
     [nq15 > -0.3 && nq60 > -0.6, `美股期貨沒有急跌（15 分鐘 ${pct(nq15)}、1 小時 ${pct(nq60)}）`, '美股期貨急跌'],
     [lowAge(day(tsmI)) >= cfg.confirmMin, `台積電今天最低價${held(day(tsmI))}`, '台積電還在跌'],
     [lowAge(day(twI)) >= cfg.confirmMin, `大盤今天最低點${held(day(twI))}`, '大盤還在跌'],
   ];
-  const cCount = C.filter(c => c[0] === true).length, cOk = cCount >= cfg.cMin;
+  // 「沒有買貴」一定要符合（10/27 起）；讀不到淨值時不擋，避免證交所資料出錯讓整天都不能買
+  const cCount = C.filter(c => c[0] === true).length, cOk = cCount >= cfg.cMin && C[0][0] !== false;
   const mark = arr => arr.map(([ok, t]) => `　└ ${ok === true ? '✅' : ok === false ? '❌' : '❔'} ${t}`).join('\n');
   // 依使用者規則的一行結論（不是我的買賣建議）：到價且 B、C 都符合才是「可以照計畫買」
   const missAll = [...(bOk ? [] : ['00406A 還在跌']), ...C.filter(c => c[0] !== true).map(c => c[2])];
   const touched = ladder.map(l => dayLow <= l.p && etf <= l.p * 1.01 ? l.n : 0).filter(Boolean);
   const verdict = bOk && cOk ? (touched.length ? `✅ 結論：符合你的規則，第 ${touched.join('、')} 批可以照計畫買` : '⏸ 結論：規則符合，但還沒到你的價位')
     : `⏸ 結論：依你的規則現在先不買（原因：${missAll.join('、')}）`;
-  const detail = `${bOk ? '✅' : '❌'} B 跌勢暫停（下面任一項就算）\n${mark(B)}\n${cOk ? '✅' : '❌'} C 大環境 ${cCount}/${C.length} 項 OK（要 ${cfg.cMin} 項）\n${mark(C)}`;
+  const detail = `${bOk ? '✅' : '❌'} B 跌勢暫停（下面任一項就算）\n${mark(B)}\n${cOk ? '✅' : '❌'} C 大環境 ${cCount}/${C.length} 項 OK（要 ${cfg.cMin} 項，而且第一項一定要符合）\n${mark(C)}`;
 
   console.log(`加權 ${tw.toFixed(0)} (${pct(twChg)}) 15分 ${pct(fast)} | 00406A ${etf} (${pct(etfChg)}) 當日低 ${dayLow} VWAP ${vwap.toFixed(2)}`);
   console.log('分批價位：' + fmtLadder(ladder));
