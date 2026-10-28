@@ -10,6 +10,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { dbReady, rest } from './supabase.mjs';
 import { supRes } from './sr.mjs';
+import { fillGaps } from './fill-gaps.mjs';
 import { fetchMargin, marginLine } from './margin.mjs';
 
 const DEFAULTS = {
@@ -44,7 +45,9 @@ async function chart(symbol, range, interval) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
   const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!r.ok) throw new Error(`${symbol} HTTP ${r.status}`);
-  const res = (await r.json()).chart.result[0], q = res.indicators.quote[0], off = res.meta.gmtoffset || 0;
+  let j = await r.json();
+  if (interval === '1d') j = await fillGaps(j, symbol);
+  const res = j.chart.result[0], q = res.indicators.quote[0], off = res.meta.gmtoffset || 0;
   const rows = (res.timestamp || []).map((t, i) => ({ t, d: new Date((t + off) * 1000).toISOString().slice(0, 10), c: q.close[i], h: q.high[i], l: q.low[i], v: q.volume?.[i] || 0 }))
     // 台股休市日 Yahoo 會補成交量 0 的假 K 棒，會讓布林下緣等分批價位算歪
     .filter(r => r.c != null && !(/\.TW$/.test(symbol) && r.v === 0 && r.h === r.l));

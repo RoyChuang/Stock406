@@ -1,5 +1,6 @@
 // GitHub Actions 定時執行：抓 Yahoo Finance 日線存成 data/*.json，供 GitHub Pages 靜態版讀取
 import { mkdir, writeFile } from 'node:fs/promises';
+import { fillGaps } from './fill-gaps.mjs';
 
 const SYMBOLS = ['00406A.TW', '^TWII', '2330.TW', '^GSPC', '^IXIC', '^SOX', '^VIX', 'TSM', 'EWT', 'TWD=X', 'NVDA', '^TNX', 'NQ=F', 'ES=F'];
 export const fileName = s => s.replace(/\^/g, '_') + '.json';
@@ -11,7 +12,7 @@ for (const s of SYMBOLS) {
   try {
     const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = await r.json();
+    const j = await fillGaps(await r.json(), s);
     if (!j.chart?.result?.[0]) throw new Error('empty result');
     await writeFile(`data/${fileName(s)}`, JSON.stringify(j));
     console.log('ok', s);

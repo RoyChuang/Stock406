@@ -14,7 +14,11 @@ async function fetchChart(symbol, range, interval) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`;
   const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!r.ok) throw new Error(`Yahoo ${r.status}`);
-  const body = await r.text();
+  let body = await r.text();
+  if (interval === '1d') {
+    const { fillGaps, needsFill } = await import('./scripts/fill-gaps.mjs');
+    if (needsFill(symbol)) body = JSON.stringify(await fillGaps(JSON.parse(body), symbol));
+  }
   cache.set(key, { t: Date.now(), body });
   return body;
 }
