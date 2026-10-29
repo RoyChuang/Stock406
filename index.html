@@ -78,6 +78,7 @@ section{display:none}section.on{display:block}
   <div class="panel"><h2>支撐與壓力</h2><div id="ovSR"></div></div>
   <div class="panel"><h2>殖利率位置</h2><div id="ovYld"></div></div>
   <div class="panel"><h2>融資融券</h2><div id="ovMg"></div></div>
+  <div class="panel"><h2>外資期貨空單</h2><div id="ovFut"></div></div>
   <div class="panel"><h2>最新推播</h2><div id="ovSig" class="mute">載入中…</div></div>
 </section>
 
@@ -265,7 +266,7 @@ async function refreshAll() {
   $('status').textContent = '更新中…';
   const out = await Promise.allSettled(SYMBOLS.map(x => load(x.s)));
   out.forEach((o, i) => { if (o.status === 'fulfilled') DATA[SYMBOLS[i].s] = o.value; else DATA[SYMBOLS[i].s] = { error: String(o.reason) }; });
-  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview(); renderBacktest(); renderMargin();
+  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview(); renderBacktest(); renderMargin(); renderFutures();
   let src = '即時';
   if (!LIVE) {
     try { const u = await (await fetch(`data/updated.json?t=${Date.now()}`, { cache: 'no-store' })).json(); src = '資料抓取於 ' + new Date(u.t).toLocaleString('zh-TW'); } catch {}
@@ -702,6 +703,27 @@ async function renderMargin() {
       ${D.slice(-n).reverse().map(x => `<tr><td>${x.date.slice(5)}</td><td>${fmt(x.amt, 0)}</td><td>${sg(x.amt - x.amtPrev)}</td><td>${fmt(ratio(x), 1)}%</td><td>${x.etfFin != null ? fmt(x.etfFin, 0) : '—'}</td><td>${x.etfFin != null ? sg(x.etfFin - x.etfFinPrev) : '—'}</td></tr>`).join('')}
     </table></div></details>
     <div class="mute" style="font-size:12px;margin-top:6px">融資＝向券商借錢買股票。大盤融資減少，代表借錢買的人退場、之後被迫賣出的壓力變小，常出現在跌勢後段；股價跌、融資卻一直增加，代表很多人借錢搶便宜，再跌可能引發斷頭賣壓。券資比高代表放空的人相對多，之後回補可能推升股價。</div>`;
+}
+
+// ---------- 外資台指期未平倉（data/futures.json，期交所每天約 15:00 後公布；scripts/futures.mjs 的推播計分同一套門檻） ----------
+async function renderFutures() {
+  let F = [];
+  try { F = (await (await fetch(`data/futures.json?t=${Date.now()}`, { cache: 'no-store' })).json()).days; } catch {}
+  if (!F.length) { $('ovFut').innerHTML = '<span class="mute">期貨資料還沒產生（期交所每天下午 3 點後公布）</span>'; return; }
+  const d = F.at(-1), past = F.slice(-250, -1), n = Math.min(20, F.length), first = F[F.length - n];
+  const rk = Math.round(past.filter(x => x.net > d.net).length / past.length * 100);
+  const sg = v => `<span class="${cls(v)}">${v >= 0 ? '+' : ''}${fmt(v, 0)}</span>`;
+  const warn = d.chg <= -3000 ? '空單一天大增 3000 口以上' : d.net < 0 && rk >= 90 ? '空單在近一年最多的 10%' : '';
+  $('ovFut').innerHTML = `<div class="mute" style="font-size:12px">${d.date} 收盤後</div>
+    <div class="tblwrap"><table><tr><th></th><th>現在</th><th>這一天</th><th>近 ${n} 天</th></tr>
+      <tr><td style="text-align:left">外資淨${d.net < 0 ? '空單' : '多單'}（口）</td><td>${fmt(Math.abs(d.net), 0)}</td><td>${sg(d.chg)}</td><td>${sg(d.net - first.net + first.chg)}</td></tr>
+    </table></div>
+    <div style="margin-top:6px">${d.net < 0 ? `空單比近一年 <b>${rk}%</b> 的日子還多` : '外資目前是淨多單'}${warn ? `　⚠️ ${warn}（風險加 1 分）` : ''}</div>
+    <details style="margin-top:6px"><summary class="mute" style="cursor:pointer;font-size:12px">每天的變化</summary><div class="tblwrap"><table>
+      <tr><th>日期</th><th>外資淨未平倉</th><th>增減</th><th>投信</th><th>自營商</th></tr>
+      ${F.slice(-n).reverse().map(x => `<tr><td>${x.date.slice(5)}</td><td>${fmt(x.net, 0)}</td><td>${sg(x.chg)}</td><td>${fmt(x.it, 0)}</td><td>${fmt(x.dealer, 0)}</td></tr>`).join('')}
+    </table></div></details>
+    <div class="mute" style="font-size:12px;margin-top:6px">台指期＝押台股指數漲跌的合約。外資淨空單＝外資押「會跌」的合約比押「會漲」的多；空單一天大增常代表外資預期短期會跌，或是拿來避險手上的股票。增減欄是當天的交易淨額（負的＝空單增加）。</div>`;
 }
 
 // ---------- 殖利率位置（配息資料來自 data/backtest.json） ----------

@@ -36,6 +36,9 @@ jobs:
           mkdir -p data
           git fetch -q --depth=1 origin data && git show FETCH_HEAD:margin.json > data/margin.json || rm -f data/margin.json
           node scripts/margin.mjs
+      # 外資台指期未平倉（期交所每天約 15:00 後公布），一個請求抓近一年
+      - run: node scripts/futures.mjs
+        continue-on-error: true
       - run: node scripts/fetch-data.mjs
       # 回測「到支撐＋止跌跡象」，失敗不影響部署（儀表板會顯示讀不到）
       - run: node scripts/backtest.mjs

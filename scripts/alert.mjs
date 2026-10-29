@@ -12,6 +12,7 @@ import { dbReady, rest } from './supabase.mjs';
 import { supRes } from './sr.mjs';
 import { fillGaps } from './fill-gaps.mjs';
 import { fetchMargin, marginLine } from './margin.mjs';
+import { fetchFutures, futuresLine, futuresRisk } from './futures.mjs';
 
 const DEFAULTS = {
   // 00406A 分批價位。每一項可以是固定價格，或每次用最新日 K 計算的動態價位：
@@ -119,7 +120,7 @@ async function watch() {
 }
 // 風險等級（固定規則）：每項給分，0–1 低、2–3 中、4 以上偏高；原因只列分數最高的兩項
 // L：00406A 日線指標、price：00406A 價格、tw：{ px, L } 大盤、w：watch() 結果、nav：折溢價
-function risk({ L, price, tw, w, nav, pre = '' }) {
+function risk({ L, price, tw, w, nav, fut, pre = '' }) {
   const f = [];
   if (price < L.bbL) f.push([2, `${pre}00406A 跌破布林下緣 ${L.bbL.toFixed(2)}（跌勢比平常強）`]);
   else if (price < L.ma20) f.push([1, `${pre}00406A 在月平均價 ${L.ma20.toFixed(2)} 之下`]);
@@ -133,6 +134,8 @@ function risk({ L, price, tw, w, nav, pre = '' }) {
   if (w['TWD=X']?.chg >= 0.5) f.push([1, `台幣急貶 ${pct(w['TWD=X'].chg)}（外資可能在賣）`]);
   if (w['^TNX']?.chg >= 3) f.push([1, `美債利率大漲 ${pct(w['^TNX'].chg)}（對高股息不利）`]);
   if (nav && nav.prem > 0.5) f.push([1, `市價比淨值貴 ${nav.prem}%（買貴風險）`]);
+  const fr = futuresRisk(fut);
+  if (fr) f.push(fr);
   const score = f.reduce((a, x) => a + x[0], 0);
   const level = score >= 4 ? '🔴 偏高' : score >= 2 ? '🟡 中' : '🟢 低';
   return { level, score, reasons: f.sort((a, b) => b[0] - a[0]).slice(0, 2).map(x => x[1]) };
@@ -155,6 +158,9 @@ const stopLine = L => {
 };
 const premTxt = p => p > 0 ? `貴 ${p}%` : p < 0 ? `便宜 ${-p}%` : '一樣';
 const fmtLadder = ladder => ladder.map(l => `第${l.n}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、');
+
+// 外資台指期（期交所約 15:00 後公布）；只取 d 那天（含）以前的資料，讀不到回 null
+const futuresUpTo = d => fetchFutures().then(F => (F = F.filter(x => x.date <= d), F.length ? F : null)).catch(e => (console.log('期貨資料讀取失敗', e.message), null));
 
 // 證交所 MIS 的 ETF 盤中預估淨值（約 15 秒更新）：e 市價、f 預估淨值、g 折溢價 %、j 時間
 async function inav(code) {
@@ -205,7 +211,8 @@ async function premarket() {
   const twRows = tw.rows.filter(r => r.d < today), dT = twRows.at(-1).d;
   const L = levels(etf.rows.filter(r => r.d <= dT)), ladder = ladderOf(L);
   const gap = ewtGap(twRows, ewt, fx, dT), estEtf = +(L.prev * (1 + gap)).toFixed(2), estTw = twRows.at(-1).c * (1 + gap);
-  const r = risk({ L, price: estEtf, tw: { px: estTw, L: levels(twRows) }, w, nav, pre: '預估 ' });
+  const fut = await futuresUpTo(dT);
+  const r = risk({ L, price: estEtf, tw: { px: estTw, L: levels(twRows) }, w, nav, fut, pre: '預估 ' });
   const when = twClosed ? '下次' : '';
   const title = `00406A 預估${when}開盤 ${estEtf}（${pct(gap * 100)}）｜風險 ${r.level}`;
   const msg = [
@@ -213,6 +220,7 @@ async function premarket() {
     ...buyLines(ladder, estEtf, '開盤可能就到'),
     ...supLine(etf.rows.filter(r => r.d < dT), estEtf),
     ...stopLine(L),
+    ...futuresLine(fut),
     `⏸ 結論：開盤前還不能判斷你的規則，盤中符合會震動通知你${nav && nav.prem > cfg.premMax ? `（目前比淨值貴 ${nav.prem}%，超過 ${cfg.premMax}%，這項一定要符合）` : ''}`,
     `上次收盤 ${L.prev}（${dT.slice(5).replace('-', '/')}）｜依美股推估，僅供參考｜${clock}`,
   ].join('\n');
@@ -282,18 +290,20 @@ async function evening() {
   const bar = upTo(etfD).at(-1), Lb = levels(before(etfD)), L = levels(upTo(etfD)), twRows = upTo(twD);
   const etfChg = (bar.c / Lb.prev - 1) * 100;
   // 融資融券約 21:00 後公布，晚間覆盤時通常已經有了；讀不到就不放這行
-  const [nav, inst, mg] = await Promise.all([inav('00406A'), institutions(dT), fetchMargin(bar.d.replace(/-/g, '')).catch(e => (console.log('融資融券讀取失敗', e.message), null))]);
+  const [nav, inst, mg, futAll] = await Promise.all([inav('00406A'), institutions(dT), fetchMargin(bar.d.replace(/-/g, '')).catch(e => (console.log('融資融券讀取失敗', e.message), null)), futuresUpTo(dT)]);
+  const fut = futAll?.at(-1).date === dT ? futAll : null;   // 今天的還沒公布就不放
   const sg = x => (x >= 0 ? '+' : '') + Math.round(x).toLocaleString('en-US');
   // 今天跌到哪幾批（用今天以前的價位）；明天的買點用含今天的價位
   const hitToday = ladderOf(Lb).map(l => bar.l <= l.p ? l.n : 0).filter(Boolean);
   const gap = ewt.rows.at(-1).d >= dT ? ewtGap(twRows, ewt, fx, dT) : null, est = gap == null ? null : +(bar.c * (1 + gap)).toFixed(2);
   const navOk = nav && nav.date === dT.replace(/-/g, '');
-  const r = risk({ L, price: bar.c, tw: { px: twRows.at(-1).c, L: levels(twRows) }, w, nav: navOk && nav });
+  const r = risk({ L, price: bar.c, tw: { px: twRows.at(-1).c, L: levels(twRows) }, w, nav: navOk && nav, fut });
   const title = `🌙 00406A 收 ${bar.c.toFixed(2)}（${pct(etfChg)}）｜風險 ${r.level}`;
   const msg = [
     `今天：最低 ${bar.l.toFixed(2)}｜${hitToday.length ? `第 ${hitToday.join('、')} 批有跌到` : '分批價位都沒跌到'}${navOk ? `｜收盤比淨值${premTxt(nav.prem)}` : ''}`,
     inst ? `法人：00406A 外資 ${inst.etf ? sg(inst.etf.f) + ' 張' : '—'}｜整個台股外資 ${sg(inst.mkt.f)} 億` : '法人：還沒公布',
     ...marginLine(mg, bar.c),
+    ...futuresLine(fut),
     est != null ? `明天：依目前美股推估 00406A 約 ${est}（${pct(gap * 100)}），美股還沒收盤，明早 8:30 再更新` : '明天：美股還沒開盤，明早 8:30 推估',
     ...riskLines(r),
     ...buyLines(ladderOf(L), est, '明天開盤可能就到'),
@@ -372,7 +382,7 @@ async function intraday() {
   const add = (keys, priority, title, msg) => { keys = [].concat(keys).filter(k => !state.sent.includes(k)); if (keys.length) signals.push({ keys, priority, title, msg }); };
   // 風險等級要多抓美股資料，只在真的要推的時候算一次
   let rk;
-  const getRisk = async () => rk ??= risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav });
+  const getRisk = async () => rk ??= risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav, fut: await futuresUpTo(before(twD).at(-1).d) });
   const head = `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}`;
   const metNew = bOk && cOk ? touched.filter(n => !state.sent.includes(`met${n}`)) : [];
   if (metNew.length) add(metNew.map(n => `met${n}`), 3, `✅ 符合你的第 ${metNew.join('、')} 批規則：${metNew.map(n => { const l = ladder.find(x => x.n === n); return `${l.p}（${l.label}）`; }).join('、')}`, `${head}\n${detail}`);
