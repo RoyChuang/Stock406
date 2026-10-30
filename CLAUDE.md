@@ -10,6 +10,7 @@
 | `server.js` | 本機伺服器，port 4060，`/api/chart` 代理 Yahoo chart API | 本機 |
 | `scripts/fetch-data.mjs` | 抓 Yahoo 日線存成 `data/*.json`（`^` 換成 `_`） | Actions |
 | `scripts/fill-gaps.mjs` | Yahoo 台股日 K 偶爾整天漏掉（例如 2026-10-27），用 5 分 K 補一根；收盤優先用 meta／隔天的 chartPreviousClose（官方收盤）。fetch-data、alert 的 `chart()`（日 K）、server.js 都會套用 | 共用 |
+| `scripts/holdings.mjs` | 00406A 前 10 大成分股（Yahoo 奇摩股市持股頁 `holdingDetail`，投信每月更新）與各股今天／近 5／近 20 天漲跌，存成 `data/holdings.json`，保留最近 12 次持股名單用來比較新進／移出／權重變化；儀表板「成分股」分頁。中信投信官網是 SPA 且 00406A 頁會跳走，抓不到每日完整持股 | Actions |
 | `scripts/summary.mjs` | 把 data 濃縮成約 3 KB 文字摘要，給雲端 Claude 讀（不要讓 Claude 直接讀原始 JSON，約 325 KB） | 雲端排程 |
 | `scripts/alert.mjs` | ntfy 推播：`MODE=premarket` 盤前推估（週一到週六；台股休市但昨晚美股有開時改推「美股收盤總結」）、`MODE=intraday` 盤中規則判斷、`MODE=evening` 晚間覆盤（美國夏令 22:00、冬令 22:45，依 `EVENING_SLOT` 自動擇一）（台股收盤、三大法人 BFI82U/T86、分批有沒有跌到、美股開盤後走勢與明天推估） | Actions |
 | `.github/workflows/pages.yml` | 抓資料（GitHub 排程常延遲數小時，盤中由 alerts.yml 每次 intraday 執行完觸發） → 部署 Pages，並把資料強制推到單一 commit 的 `data` 分支 | Actions |

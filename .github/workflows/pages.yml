@@ -39,6 +39,13 @@ jobs:
       # 外資台指期未平倉（期交所每天約 15:00 後公布），一個請求抓近一年
       - run: node scripts/futures.mjs
         continue-on-error: true
+      # 00406A 前 10 大成分股與漲跌；先從 data 分支還原舊檔，保留歷次持股名單（比較新進／移出）
+      - name: Holdings
+        continue-on-error: true
+        run: |
+          mkdir -p data
+          git fetch -q --depth=1 origin data && git show FETCH_HEAD:holdings.json > data/holdings.json || rm -f data/holdings.json
+          node scripts/holdings.mjs
       - run: node scripts/fetch-data.mjs
       # 回測「到支撐＋止跌跡象」，失敗不影響部署（儀表板會顯示讀不到）
       - run: node scripts/backtest.mjs

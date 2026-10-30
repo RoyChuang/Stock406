@@ -59,7 +59,7 @@ section{display:none}section.on{display:block}
   <div><span id="status" class="mute">載入中…</span> <button id="refresh">重新整理</button>
   <label class="mute"><input type="checkbox" id="auto" checked> 每 60 秒更新</label></div>
   <nav class="tabs" id="tabs">
-    <button data-t="home">總覽</button><button data-t="market">行情</button><button data-t="pos">我的部位</button><button data-t="sig">推播紀錄</button><button data-t="bt">回測</button><button data-t="learn">觀察與策略</button>
+    <button data-t="home">總覽</button><button data-t="market">行情</button><button data-t="pos">我的部位</button><button data-t="hold">成分股</button><button data-t="sig">推播紀錄</button><button data-t="bt">回測</button><button data-t="learn">觀察與策略</button>
   </nav>
 </header>
 <main>
@@ -125,6 +125,13 @@ section{display:none}section.on{display:block}
         <div id="trades"></div>
       </div>
     </div>
+  </div>
+</section>
+
+<section data-tab="hold">
+  <div class="panel">
+    <h2>00406A 前 10 大成分股</h2>
+    <div id="hold"></div>
   </div>
 </section>
 
@@ -266,7 +273,7 @@ async function refreshAll() {
   $('status').textContent = '更新中…';
   const out = await Promise.allSettled(SYMBOLS.map(x => load(x.s)));
   out.forEach((o, i) => { if (o.status === 'fulfilled') DATA[SYMBOLS[i].s] = o.value; else DATA[SYMBOLS[i].s] = { error: String(o.reason) }; });
-  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview(); renderBacktest(); renderMargin(); renderFutures();
+  renderCards(); renderDetail(); renderPosition(); renderWatch(); renderSignals(); renderOverview(); renderBacktest(); renderMargin(); renderFutures(); renderHoldings();
   let src = '即時';
   if (!LIVE) {
     try { const u = await (await fetch(`data/updated.json?t=${Date.now()}`, { cache: 'no-store' })).json(); src = '資料抓取於 ' + new Date(u.t).toLocaleString('zh-TW'); } catch {}
@@ -726,6 +733,28 @@ async function renderFutures() {
     <div class="mute" style="font-size:12px;margin-top:6px">台指期＝押台股指數漲跌的合約。外資淨空單＝外資押「會跌」的合約比押「會漲」的多；空單一天大增常代表外資預期短期會跌，或是拿來避險手上的股票。增減欄是當天的交易淨額（負的＝空單增加）。</div>`;
 }
 
+// ---------- 成分股（data/holdings.json，scripts/holdings.mjs 產生；持股名單投信每月更新，漲跌跟著資料更新） ----------
+async function renderHoldings() {
+  let H = null;
+  try { H = await (await fetch(`data/holdings.json?t=${Date.now()}`, { cache: 'no-store' })).json(); } catch {}
+  if (!H?.list?.length) { $('hold').innerHTML = '<span class="mute">成分股資料還沒產生</span>'; return; }
+  const sg = (v, dp = 2) => v == null ? '—' : `<span class="${cls(v)}">${v >= 0 ? '+' : ''}${fmt(v, dp)}</span>`;
+  const ok = H.list.filter(x => x.d1 != null), w = ok.reduce((s, x) => s + x.w, 0), c = ok.reduce((s, x) => s + x.w * x.d1 / 100, 0);
+  const t = H.list.find(x => x.t)?.t, e = H.etf;
+  // 和上一次持股名單比較：新進、移出、權重變化
+  const prev = H.hist?.length > 1 ? H.hist.at(-2) : null, pw = new Map(prev?.list.map(x => [x.ticker, x.w]) || []);
+  const out = prev ? prev.list.filter(x => !H.list.some(y => y.ticker === x.ticker)) : [];
+  const chg = x => !prev ? '' : pw.has(x.ticker) ? sg(x.w - pw.get(x.ticker)) : '<span class="warn">新進</span>';
+  $('hold').innerHTML = `<div class="mute" style="font-size:12px">持股名單 ${H.date}（投信每月公布）｜價格 ${t ? new Date(t).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</div>
+    <div style="margin:8px 0">前 10 大合計占 <b>${fmt(w, 1)}%</b>，今天平均 ${sg(c / w * 100)}%，合計讓 00406A ${c >= 0 ? '多漲' : '多跌'}約 <b>${sg(c)}</b> 個百分點${e ? `｜00406A ${fmt(e.px)}（${sg(e.d1)}%）` : ''}</div>
+    <div class="tblwrap"><table><tr><th>股票</th><th>權重</th>${prev ? `<th>權重變化<br>（比 ${prev.date.slice(5)}）</th>` : ''}<th>現價</th><th>今天</th><th>影響<br>（百分點）</th><th>近 5 天</th><th>近 20 天</th></tr>
+      ${H.list.map(x => `<tr><td style="text-align:left">${x.name} <span class="mute">${x.ticker.replace(/\.TWO?$/, '')}</span></td><td>${fmt(x.w)}%</td>${prev ? `<td>${chg(x)}</td>` : ''}<td>${x.px != null ? fmt(x.px, x.px < 100 ? 2 : 0) : '—'}</td><td>${sg(x.d1)}%</td><td>${x.d1 != null ? sg(x.w * x.d1 / 100) : '—'}</td><td>${sg(x.d5)}%</td><td>${sg(x.d20)}%</td></tr>`).join('')}
+      ${e ? `<tr><td style="text-align:left"><b>00406A</b></td><td></td>${prev ? '<td></td>' : ''}<td>${fmt(e.px)}</td><td>${sg(e.d1)}%</td><td></td><td>${sg(e.d5)}%</td><td>${sg(e.d20)}%</td></tr>` : ''}
+    </table></div>
+    ${out.length ? `<div style="margin-top:6px">比 ${prev.date.slice(5)} 移出前 10 大：${out.map(x => `${x.name}（原 ${fmt(x.w)}%）`).join('、')}</div>` : ''}
+    <div class="mute" style="font-size:12px;margin-top:6px">影響＝權重 × 今天漲跌，代表這檔股票讓 00406A 多漲或多跌幾個百分點。只列前 10 大，其他持股和現金沒有算進去；主動式 ETF 經理人每天都可能調整持股，名單是投信上次公布的，實際持股可能已經不同。</div>`;
+}
+
 // ---------- 殖利率位置（配息資料來自 data/backtest.json） ----------
 function renderYield() {
   const d = DATA['00406A.TW'], me = BT?.syms?.find(x => x.s === '00406A.TW')?.yld;
@@ -792,7 +821,7 @@ async function renderBacktest() {
 }
 
 // ---------- 分頁 ----------
-const TABS = ['home', 'market', 'pos', 'sig', 'bt', 'learn'];
+const TABS = ['home', 'market', 'pos', 'hold', 'sig', 'bt', 'learn'];
 function showTab(t) {
   if (!TABS.includes(t)) t = 'home';
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
