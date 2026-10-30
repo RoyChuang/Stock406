@@ -39,7 +39,7 @@ jobs:
       # 外資台指期未平倉（期交所每天約 15:00 後公布），一個請求抓近一年
       - run: node scripts/futures.mjs
         continue-on-error: true
-      # 00406A 前 10 大成分股與漲跌；先從 data 分支還原舊檔，保留歷次持股名單（比較新進／移出）
+      # 00406A 全部成分股（MoneyDJ，失敗時 Yahoo 奇摩前 10 大）與漲跌；先從 data 分支還原舊檔，保留歷次持股名單（比較新進／移出／張數增減）
       - name: Holdings
         continue-on-error: true
         run: |
