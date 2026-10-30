@@ -25,15 +25,20 @@ async function fromMoneyDJ() {
   const html = await text(MONEYDJ);
   const date = /資料日期\s*[:：]\s*(\d{4})\/(\d{2})\/(\d{2})/.exec(clean(html));
   if (!date) throw new Error('找不到資料日期');
-  const list = [], other = [];
-  for (const tr of html.split(/<tr[\s>]/i).slice(1)) {
-    const cells = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(m => clean(m[1]));
-    if (cells.length < 3) continue;
-    const w = num(cells[1]), s = num(cells[2]);
-    if (!isFinite(w) || !isFinite(s)) continue;
-    const m = /^(.+?)\((\d{4,6}[A-Z]?)\.TWO?\)$/.exec(cells[0]);
-    if (m) list.push({ code: m[2], name: m[1], w, s });
-    else other.push({ name: cells[0], w, s });
+  // 頁面還有「相關 ETF」等其他表格，只讀股票列最多的那一張
+  let list = [], other = [];
+  for (const table of html.split(/<table[\s>]/i).slice(1)) {
+    const L = [], O = [];
+    for (const tr of table.split(/<\/table>/i)[0].split(/<tr[\s>]/i).slice(1)) {
+      const cells = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(m => clean(m[1]));
+      if (cells.length < 3) continue;
+      const w = num(cells[1]), s = num(cells[2]);
+      if (!isFinite(w) || !isFinite(s)) continue;
+      const m = /^(.+?)\((\d{4,6}[A-Z]?)\.TWO?\)$/.exec(cells[0]);
+      if (m) L.push({ code: m[2], name: m[1], w, s });
+      else O.push({ name: cells[0], w, s });
+    }
+    if (L.length > list.length) [list, other] = [L, O];
   }
   if (list.length < 10) throw new Error(`只解析到 ${list.length} 檔`);
   return { src: 'moneydj', date: `${date[1]}-${date[2]}-${date[3]}`, list, other };
