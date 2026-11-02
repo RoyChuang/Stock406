@@ -394,14 +394,17 @@ function renderDetail() {
   s.hist.setData(rows.map((r, i) => ({ time: r.d, value: x.hist[i], color: x.hist[i] >= 0 ? '#f8514999' : '#3fb95099' })));
   // 支撐（綠）、壓力（紅）畫成橫線；00406A 另外畫分批買點（藍）
   (charts.lines || []).forEach(l => s.candle.removePriceLine(l));
-  const sr = supRes(rows, lastPx(d)), short = g => g.label.split('、')[0];
+  // 價位標籤會從右邊蓋到最近的 K 棒，所以只寫一個字（依據列在總覽「支撐與壓力」），同價的批次合併成一個標籤
+  const sr = supRes(rows, lastPx(d)), batches = {};
+  if (selected === '00406A.TW') for (const r of buyLadder(d)) (batches[r.p] ??= []).push(r.n);
   charts.lines = [
-    ...sr.sup.map(g => s.candle.createPriceLine({ price: g.p, color: '#3fb950', lineWidth: g.n >= 3 ? 2 : 1, lineStyle: 2, title: `支撐 ${short(g)}` })),
-    ...sr.res.map(g => s.candle.createPriceLine({ price: g.p, color: '#f85149', lineWidth: g.n >= 3 ? 2 : 1, lineStyle: 2, title: `壓力 ${short(g)}` })),
-    ...(selected === '00406A.TW' ? buyLadder(d).map(r => s.candle.createPriceLine({ price: r.p, color: '#58a6ff', lineWidth: 1, lineStyle: 1, title: `第 ${r.n} 批` })) : []),
+    ...sr.sup.map(g => s.candle.createPriceLine({ price: g.p, color: '#3fb950', lineWidth: g.n >= 3 ? 2 : 1, lineStyle: 2, title: '撐' })),
+    ...sr.res.map(g => s.candle.createPriceLine({ price: g.p, color: '#f85149', lineWidth: g.n >= 3 ? 2 : 1, lineStyle: 2, title: '壓' })),
+    ...Object.entries(batches).map(([p, ns]) => s.candle.createPriceLine({ price: +p, color: '#58a6ff', lineWidth: 1, lineStyle: 1, title: `批${ns.join('·')}` })),
   ];
+  // 右邊多留幾格空白，最新的 K 棒不會被標籤蓋住
   const n = rows.length;
-  charts.all.forEach(c => c.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 120), to: n + 3 }));
+  charts.all.forEach(c => c.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 120), to: n + 10 }));
 
   const N = n - 1, dp = meta.dp, p = x.c[N];
   const rel = v => v == null ? '' : `<span class="${cls(p - v)}">${sgn((p / v - 1) * 100)}%</span>`;
