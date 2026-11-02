@@ -367,7 +367,19 @@ async function intraday() {
   // 依使用者規則的一行結論（不是我的買賣建議）：到價且 B、C 都符合才是「可以照計畫買」
   const missAll = [...(bOk ? [] : ['00406A 還在跌']), ...C.filter(c => c[0] !== true).map(c => c[2])];
   const touched = ladder.map(l => dayLow <= l.p && etf <= l.p * 1.01 ? l.n : 0).filter(Boolean);
-  const verdict = bOk && cOk ? (touched.length ? `✅ 結論：符合你的規則，第 ${touched.join('、')} 批可以照計畫買` : '⏸ 結論：規則符合，但還沒到你的價位')
+  // 每個訊號每天只推一次；同時符合多批合併成一則
+  // state.met：今天哪幾批符合過（時間、價格、通知次數），state.off：符合過之後又變成不符合的批次（再符合時可以再通知一次）
+  let state = { date: today, sent: [], met: {}, off: [] };
+  try { const st = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (st.date === today) state = { ...state, ...st }; } catch {}
+  const metNow = bOk && cOk ? touched : [];
+  // 符合過的批次依時間分組：「今天 09:35 第 1、2、3 批已經符合過（8.51）」
+  const metBefore = Object.entries(state.met).filter(([n]) => !metNow.includes(+n));
+  const metGroups = Object.values(Object.groupBy(metBefore, ([, m]) => `${m.time}|${m.price}`));
+  const metLine = metGroups.length ? metGroups.map(g => `✅ 今天 ${g[0][1].time} 第 ${g.map(([n]) => n).join('、')} 批已經符合過（${g[0][1].price}）`).join('\n') + '\n' : '';
+  const nowWhy = bOk && cOk ? '規則符合，但價格已經離開你的價位' : `不符合（${missAll.join('、')}）`;
+  const verdict = metNow.length ? `${metLine}✅ 結論：符合你的規則，第 ${metNow.join('、')} 批可以照計畫買`
+    : metBefore.length ? `${metLine}⏸ 現在 ${etf} ${nowWhy}：照之前符合時買了的不用動；還沒買的先等，再符合會通知你`
+    : bOk && cOk ? '⏸ 結論：規則符合，但還沒到你的價位'
     : `⏸ 結論：依你的規則現在先不買（原因：${missAll.join('、')}）`;
   const detail = `${bOk ? '✅' : '❌'} B 跌勢暫停（下面任一項就算）\n${mark(B)}\n${cOk ? '✅' : '❌'} C 大環境 ${cCount}/${C.length} 項 OK（要 ${cfg.cMin} 項，而且第一項一定要符合）\n${mark(C)}`;
 
@@ -375,18 +387,20 @@ async function intraday() {
   console.log('分批價位：' + fmtLadder(ladder));
   console.log(detail);
   // 所有推播都用 priority 3（短震一下，使用者覺得 4 以上震太長）
-  // 每個訊號每天只推一次；同時符合多批合併成一則
-  let state = { date: today, sent: [] };
-  try { const st = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (st.date === today) state = st; } catch {}
   const signals = [];
   const add = (keys, priority, title, msg) => { keys = [].concat(keys).filter(k => !state.sent.includes(k)); if (keys.length) signals.push({ keys, priority, title, msg }); };
   // 風險等級要多抓美股資料，只在真的要推的時候算一次
   let rk;
   const getRisk = async () => rk ??= risk({ L, price: etf, tw: { px: tw, L: levels(before(twD)) }, w: await watch(), nav, fut: await futuresUpTo(before(twD).at(-1).d) });
   const head = `00406A 現價 ${etf}（今天 ${pct(etfChg)}）\n${verdict}`;
-  const metNew = bOk && cOk ? touched.filter(n => !state.sent.includes(`met${n}`)) : [];
-  if (metNew.length) add(metNew.map(n => `met${n}`), 3, `✅ 符合你的第 ${metNew.join('、')} 批規則：${metNew.map(n => { const l = ladder.find(x => x.n === n); return `${l.p}（${l.label}）`; }).join('、')}`, `${head}\n${detail}`);
-  const touchNew = bOk && cOk ? [] : touched;
+  // 第一次符合推一次；符合之後變成不符合、後來又符合，再推一次「又符合了」（每批一天最多 2 次）
+  const metNew = metNow.filter(n => !state.met[n]), metAgain = metNow.filter(n => state.met[n] && state.off.includes(n) && state.met[n].count < 2);
+  const batchTxt = ns => ns.map(n => { const l = ladder.find(x => x.n === n); return `${l.p}（${l.label}）`; }).join('、');
+  if (metNew.length) add(metNew.map(n => `met${n}`), 3, `✅ 符合你的第 ${metNew.join('、')} 批規則：${batchTxt(metNew)}`, `${head}\n${detail}`);
+  if (metAgain.length) add(metAgain.map(n => `metAgain${n}`), 3, `✅ 第 ${metAgain.join('、')} 批又符合了：${batchTxt(metAgain)}`,
+    `${head}\n（今天 ${metAgain.map(n => `第 ${n} 批 ${state.met[n].time} 符合過`).join('、')}，之後一度不符合）\n${detail}`);
+  // 符合過的批次之後不再推「到價但規則還沒符合」，免得前後矛盾；現況放在每小時摘要
+  const touchNew = bOk && cOk ? [] : touched.filter(n => !state.met[n]);
   if (touchNew.length) add(touchNew.map(n => `touch${n}`), 3, `🟡 第 ${touchNew.join('、')} 批到價，但規則還沒符合`, `${head}\n${detail}`);
   if (etf < L.bbL) add('bbL', 3, '00406A 跌破布林下緣', `現價 ${etf}，布林下緣 ${L.bbL.toFixed(2)}（近期正常波動的底部，跌破代表跌勢比平常強）`);
   // 急跌以 30 分鐘為單位去重
@@ -405,10 +419,18 @@ async function intraday() {
   for (const s of signals) {
     if (!await push(s.title, `${s.msg}\n${clock}`, s.priority, [s.keys[0].startsWith('met') ? 'white_check_mark' : 'chart_with_downwards_trend'])) continue;
     state.sent.push(...s.keys);
+    for (const k of s.keys) {
+      const n = +(/^met(?:Again)?(\d+)$/.exec(k)?.[1]);
+      if (!n) continue;
+      if (k.startsWith('metAgain')) { state.met[n].count++; state.off = state.off.filter(x => x !== n); }
+      else state.met[n] = { time: clock.slice(0, 5), price: etf, count: 1 };
+    }
     const kind = s.keys[0].replace(/\d+$/, '').replace(/^sum$/, 'summary');
     const batches = s.keys.map(k => +(/^(?:met|touch)(\d+)$/.exec(k)?.[1])).filter(Boolean);
     await logSignal({ trade_date: session, kind, title: s.title, price: etf, risk: await getRisk(), verdict, batches });
   }
   if (!signals.length) console.log('沒有新訊號');
+  // 符合過、現在不符合的批次記成 off，之後再符合才會推「又符合了」
+  for (const n of Object.keys(state.met).map(Number)) if (!metNow.includes(n) && !state.off.includes(n)) state.off.push(n);
   await writeFile(STATE_FILE, JSON.stringify(state));
 }
