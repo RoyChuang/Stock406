@@ -13,6 +13,7 @@ import { supRes } from './sr.mjs';
 import { fillGaps } from './fill-gaps.mjs';
 import { fetchMargin, marginLine } from './margin.mjs';
 import { fetchFutures, futuresLine, futuresRisk } from './futures.mjs';
+import { fetchTurnover, volRule, volLine } from './turnover.mjs';
 
 const DEFAULTS = {
   // 00406A 分批價位。每一項可以是固定價格，或每次用最新日 K 計算的動態價位：
@@ -22,9 +23,11 @@ const DEFAULTS = {
   // 使用者的分批規則（2026-10-23 定，10-27 修改）：每一批都要 B 且 C
   //   B 止跌確認：00406A 當日低點已經 confirmMin 分鐘沒有被跌破，或現價站上 VWAP
   //   C 環境過濾：5 項環境條件中至少 cMin 項符合，而且「市價比淨值貴不超過 premMax %」一定要符合
+  //   另外一定要符合（11-04 加）：大盤成交金額沒有連續 volDays 天一天比一天少（不算在 cMin 的項數裡）
   confirmMin: 15,
   cMin: 3,
   premMax: 0.3,
+  volDays: 3,
 };
 let ladderSrc = 'ALERT_CONFIG';
 const cfg = { ...DEFAULTS, ...JSON.parse(process.env.ALERT_CONFIG || '{}') };
@@ -160,6 +163,9 @@ const premTxt = p => p > 0 ? `貴 ${p}%` : p < 0 ? `便宜 ${-p}%` : '一樣';
 const fmtLadder = ladder => ladder.map(l => `第${l.n}批 ${l.p}${l.label ? `(${l.label})` : ''}`).join('、');
 
 // 外資台指期（期交所約 15:00 後公布）；只取 d 那天（含）以前的資料，讀不到回 null
+// 大盤成交金額量縮規則：只用 before 以前的交易日；讀不到回 ok=null（不擋）
+const turnoverRule = before => fetchTurnover(before.slice(0, 10)).then(T => volRule(T, before, cfg.volDays))
+  .catch(e => (console.log('大盤成交金額讀取失敗', e.message), volRule([], before, cfg.volDays)));
 const futuresUpTo = d => fetchFutures().then(F => (F = F.filter(x => x.date <= d), F.length ? F : null)).catch(e => (console.log('期貨資料讀取失敗', e.message), null));
 
 // 證交所 MIS 的 ETF 盤中預估淨值（約 15 秒更新）：e 市價、f 預估淨值、g 折溢價 %、j 時間
@@ -211,7 +217,7 @@ async function premarket() {
   const twRows = tw.rows.filter(r => r.d < today), dT = twRows.at(-1).d;
   const L = levels(etf.rows.filter(r => r.d <= dT)), ladder = ladderOf(L);
   const gap = ewtGap(twRows, ewt, fx, dT), estEtf = +(L.prev * (1 + gap)).toFixed(2), estTw = twRows.at(-1).c * (1 + gap);
-  const fut = await futuresUpTo(dT);
+  const [fut, vol] = await Promise.all([futuresUpTo(dT), turnoverRule(today)]);
   const r = risk({ L, price: estEtf, tw: { px: estTw, L: levels(twRows) }, w, nav, fut, pre: '預估 ' });
   const when = twClosed ? '下次' : '';
   const title = `00406A 預估${when}開盤 ${estEtf}（${pct(gap * 100)}）｜風險 ${r.level}`;
@@ -221,7 +227,9 @@ async function premarket() {
     ...supLine(etf.rows.filter(r => r.d < dT), estEtf),
     ...stopLine(L),
     ...futuresLine(fut),
-    `⏸ 結論：開盤前還不能判斷你的規則，盤中符合會震動通知你${nav && nav.prem > cfg.premMax ? `（目前比淨值貴 ${nav.prem}%，超過 ${cfg.premMax}%，這項一定要符合）` : ''}`,
+    ...volLine(vol, `${when || '今天'}`),
+    vol.ok === false ? `⏸ 結論：大盤成交量已經連續 ${cfg.volDays} 天變少，${when || '今天'}依你的規則不買（這項一定要符合）`
+    : `⏸ 結論：開盤前還不能判斷你的規則，盤中符合會震動通知你${nav && nav.prem > cfg.premMax ? `（目前比淨值貴 ${nav.prem}%，超過 ${cfg.premMax}%，這項一定要符合）` : ''}`,
     `上次收盤 ${L.prev}（${dT.slice(5).replace('-', '/')}）｜依美股推估，僅供參考｜${clock}`,
   ].join('\n');
   await push(title, msg, 3, ['sunrise']);
@@ -291,7 +299,9 @@ async function evening() {
   const etfChg = (bar.c / Lb.prev - 1) * 100;
   // 融資融券約 21:00 後公布，晚間覆盤時通常已經有了；讀不到就不放這行
   const [nav, inst, mg, futAll] = await Promise.all([inav('00406A'), institutions(dT), fetchMargin(bar.d.replace(/-/g, '')).catch(e => (console.log('融資融券讀取失敗', e.message), null)), futuresUpTo(dT)]);
-  const fut = futAll?.at(-1).date === dT ? futAll : null;   // 今天的還沒公布就不放
+  const fut = futAll?.at(-1).date === dT ? futAll : null;
+  // 明天的量縮判斷含今天的成交金額（證交所約 14:00 公布）；今天的還沒公布就不判斷
+  const volT = await turnoverRule(dT + '~'), vol = volT.days?.at(-1).d === dT ? volT : { ok: null };   // 今天的還沒公布就不放
   const sg = x => (x >= 0 ? '+' : '') + Math.round(x).toLocaleString('en-US');
   // 今天跌到哪幾批（用今天以前的價位）；明天的買點用含今天的價位
   const hitToday = ladderOf(Lb).map(l => bar.l <= l.p ? l.n : 0).filter(Boolean);
@@ -309,7 +319,8 @@ async function evening() {
     ...buyLines(ladderOf(L), est, '明天開盤可能就到'),
     ...supLine(upTo(etfD), est ?? bar.c),
     ...stopLine(L),
-    '⏸ 結論：明天盤中照你的規則判斷，符合會震動通知你',
+    ...volLine(vol, '明天'),
+    vol.ok === false ? `⏸ 結論：大盤成交量已經連續 ${cfg.volDays} 天變少，明天依你的規則不買（這項一定要符合）` : '⏸ 結論：明天盤中照你的規則判斷，符合會震動通知你',
     clock,
   ].join('\n');
   await push(title, msg, 3, ['crescent_moon']);
@@ -362,15 +373,22 @@ async function intraday() {
     [lowAge(day(twI)) >= cfg.confirmMin, `大盤今天最低點${held(day(twI))}`, '大盤還在跌'],
   ];
   // 「沒有買貴」一定要符合（10/27 起）；讀不到淨值時不擋，避免證交所資料出錯讓整天都不能買
-  const cCount = C.filter(c => c[0] === true).length, cOk = cCount >= cfg.cMin && C[0][0] !== false;
+  // 大盤成交金額只用「當日以前」的官方數字，一天內不會變：存在 alert-state 裡，同一天不重抓（證交所請求太多會擋）
+  let vol;
+  try { const st = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (st.date === today && st.vol?.session === session) vol = st.vol.rule; } catch {}
+  vol ??= await turnoverRule(session);
+  const V = [vol.ok, vol.text, vol.why];
+  // 「大盤沒有一直量縮」也一定要符合（11-04 起），不算在 C 的項數裡；讀不到時不擋
+  const cCount = C.filter(c => c[0] === true).length, cEnv = cCount >= cfg.cMin && C[0][0] !== false, cOk = cEnv && V[0] !== false;
   const mark = arr => arr.map(([ok, t]) => `　└ ${ok === true ? '✅' : ok === false ? '❌' : '❔'} ${t}`).join('\n');
   // 依使用者規則的一行結論（不是我的買賣建議）：到價且 B、C 都符合才是「可以照計畫買」
-  const missAll = [...(bOk ? [] : ['00406A 還在跌']), ...C.filter(c => c[0] !== true).map(c => c[2])];
+  const missAll = [...(bOk ? [] : ['00406A 還在跌']), ...C.filter(c => c[0] !== true).map(c => c[2]), ...(V[0] === false ? [V[2]] : [])];
   const touched = ladder.map(l => dayLow <= l.p && etf <= l.p * 1.01 ? l.n : 0).filter(Boolean);
   // 每個訊號每天只推一次；同時符合多批合併成一則
   // state.met：今天哪幾批符合過（時間、價格、通知次數），state.off：符合過之後又變成不符合的批次（再符合時可以再通知一次）
   let state = { date: today, sent: [], met: {}, off: [] };
   try { const st = JSON.parse(await readFile(STATE_FILE, 'utf8')); if (st.date === today) state = { ...state, ...st }; } catch {}
+  if (vol.ok != null) state.vol = { session, rule: vol };
   const metNow = bOk && cOk ? touched : [];
   // 符合過的批次依時間分組：「今天 09:35 第 1、2、3 批已經符合過（8.51）」
   const metBefore = Object.entries(state.met).filter(([n]) => !metNow.includes(+n));
@@ -381,7 +399,7 @@ async function intraday() {
     : metBefore.length ? `${metLine}⏸ 現在 ${etf} ${nowWhy}：照之前符合時買了的不用動；還沒買的先等，再符合會通知你`
     : bOk && cOk ? '⏸ 結論：規則符合，但還沒到你的價位'
     : `⏸ 結論：依你的規則現在先不買（原因：${missAll.join('、')}）`;
-  const detail = `${bOk ? '✅' : '❌'} B 跌勢暫停（下面任一項就算）\n${mark(B)}\n${cOk ? '✅' : '❌'} C 大環境 ${cCount}/${C.length} 項 OK（要 ${cfg.cMin} 項，而且第一項一定要符合）\n${mark(C)}`;
+  const detail = `${bOk ? '✅' : '❌'} B 跌勢暫停（下面任一項就算）\n${mark(B)}\n${cEnv ? '✅' : '❌'} C 大環境 ${cCount}/${C.length} 項 OK（要 ${cfg.cMin} 項，而且第一項一定要符合）\n${mark(C)}\n${V[0] === false ? '❌' : V[0] ? '✅' : '❔'} D 大盤成交量（一定要符合）\n${mark([V])}`;
 
   console.log(`加權 ${tw.toFixed(0)} (${pct(twChg)}) 15分 ${pct(fast)} | 00406A ${etf} (${pct(etfChg)}) 當日低 ${dayLow} VWAP ${vwap.toFixed(2)}`);
   console.log('分批價位：' + fmtLadder(ladder));
